@@ -316,7 +316,7 @@ def main():
     
     print(f"\n🔍 Analyzing posts...")
     
-    for m in reversed(msgs[-LOOKBACK:]):
+    for idx, m in enumerate(reversed(msgs[-LOOKBACK:])):
         if not has_group_lines(m["text"]):
             continue
         
@@ -334,6 +334,10 @@ def main():
             print(f"  ✅ Date from text: {post_date} | {preview}...")
         
         score = 0
+        
+        # Бонус за позицию (более новые посты важнее)
+        # idx=0 это самый новый, idx=15 это самый старый
+        score += (LOOKBACK - idx) * 10  # Даёт от 10 до 2000 баллов
         
         if has_keywords(m["text"]):
             score += 1000
