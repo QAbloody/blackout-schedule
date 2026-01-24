@@ -202,33 +202,64 @@ def has_keywords(text: str) -> bool:
 
 
 def parse_groups(text: str) -> dict:
+    """
+    Парсит графики отключений из текста.
+    Поддерживает форматы:
+    - 1.1 03:00 - 10:00 / 13:30 - 20:30
+    - 1.1 - 08:00-12:00, 16:00-20:00
+    - 1.1: 08:00-12:00; 16:00-20:00
+    """
     groups = {}
-    norm = text.replace("–", "-").replace("—", "-")
+    norm = text.replace("–", "-").replace("—", "-").replace("−", "-")
 
     for line in norm.splitlines():
         line = line.strip()
-        line = line.lstrip("•").lstrip("🔴").lstrip("❌").strip()
-
-        m = re.match(r"^(\d+\.\d+)\s*-\s*(.+)$", line)
+        # Убираем эмодзи и маркеры
+        line = line.lstrip("•").lstrip("🔴").lstrip("❌").lstrip("-").strip()
+        
+        # Паттерн 1: "1.1 03:00 - 10:00 / 13:30 - 20:30"
+        m = re.match(r"^(\d+\.\d+)\s+(.+)$", line)
         if not m:
             continue
 
-        g = m.group(1)
+        group_id = m.group(1)
         rest = m.group(2).strip()
+        
+        # Убираем все после двоеточия или тире в начале
+        rest = re.sub(r"^[-:]\s*", "", rest)
+        
+        # Разделяем интервалы по /, ; или запятой
+        parts = [p.strip() for p in re.split(r"[/;,]", rest) if p.strip()]
+        
+        intervals = []
+        for part in parts:
+            # Убираем пробелы вокруг тире
+            part = re.sub(r"\s*-\s*", "-", part)
+            # Убираем лишние пробелы
+            part = re.sub(r"\s+", " ", part).strip()
+            
+            # Ищем паттерны времени
+            # Формат: 03:00-10:00 или 03:00 - 10:00
+            time_matches = re.findall(r"\d{2}:\d{2}", part)
+            
+            if len(time_matches) >= 2:
+                # Создаём интервалы из пар времён
+                for i in range(0, len(time_matches), 2):
+                    if i + 1 < len(time_matches):
+                        interval = f"{time_matches[i]}-{time_matches[i+1]}"
+                        intervals.append(interval)
+            elif len(time_matches) == 1:
+                # Если только одно время, возможно формат "до 24:00"
+                if "24:00" in part or "00:00" in part:
+                    interval = f"{time_matches[0]}-24:00"
+                    intervals.append(interval)
 
-        parts = [p.strip() for p in re.split(r"[;,]", rest) if p.strip()]
-        good = []
-        for itv in parts:
-            itv = itv.replace("–", "-").replace("—", "-")
-            itv = re.sub(r"\s+", "", itv)
-            if re.match(r"^\d{2}:\d{2}-\d{2}:\d{2}$", itv) or re.match(r"^\d{2}:\d{2}-24:00$", itv):
-                good.append(itv)
-
-        if good:
-            groups[g] = good
+        if intervals:
+            groups[group_id] = intervals
 
     if not groups:
         raise RuntimeError("Parsed 0 groups from candidate post (format changed?)")
+    
     return groups
 
 
@@ -354,45 +385,117 @@ def main():
         print(f"Latest message post ID: {latest_msg.get('post')}")
         print(f"Latest message preview: {latest_msg['text'][:150]}...")
 
-    # 1) ключевые слова + группы
-    best = None
+    # НОВАЯ ЛОГИКА: ищем самый свежий график за последние 24 часа
+    now = datetime.now(timezone.utc)
+    one_day_ago = now - timedelta(days=1)
+    
+    candidates = []
+    
+    # Собираем все подходящие посты
     for m in reversed(msgs[-LOOKBACK:]):
-        if has_group_lines(m["text"]) and has_keywords(m["text"]):
-            best = m
-            break
-
-    # 2) fallback: просто группы
-    if best is None:
+        msg_time = datetime.fromtimestamp(m['ts'], tz=timezone.utc)
+        
+        # Пропускаем сообщения старше 24 часов
+        if msg_time < one_day_ago:
+            continue
+        
+        # Проверяем наличие групп
+        if not has_group_lines(m["text"]):
+            continue
+        
+        # Извлекаем дату из поста
+        post_date = extract_date_from_text(m["text"])
+        if not post_date:
+            post_date = date_from_message_ts(m.get("ts", 0))
+        
+        # Добавляем в кандидаты
+        score = 0
+        
+        # Бонус за наличие ключевых слов
+        if has_keywords(m["text"]):
+            score += 100
+        
+        # Бонус за свежесть (последние сообщения важнее)
+        score += m['ts']
+        
+        # Бонус если дата в посте = сегодня или завтра
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        try:
+            post_date_obj = date.fromisoformat(post_date)
+            if post_date_obj == today:
+                score += 1000
+            elif post_date_obj == tomorrow:
+                score += 500
+        except:
+            pass
+        
+        candidates.append({
+            'msg': m,
+            'score': score,
+            'date': post_date
+        })
+    
+    if not candidates:
+        print("WARNING: No candidates found in last 24 hours, falling back to old logic")
+        # Старая логика как fallback
+        best = None
         for m in reversed(msgs[-LOOKBACK:]):
-            if has_group_lines(m["text"]):
-                print("WARNING: no keyword match; using latest post that contains group lines")
+            if has_group_lines(m["text"]) and has_keywords(m["text"]):
                 best = m
                 break
+        
+        if best is None:
+            for m in reversed(msgs[-LOOKBACK:]):
+                if has_group_lines(m["text"]):
+                    print("WARNING: no keyword match; using latest post that contains group lines")
+                    best = m
+                    break
+        
+        if best is None:
+            raise RuntimeError("No suitable post found in last LOOKBACK messages")
+        
+        date_str = extract_date_from_text(best["text"])
+        if not date_str:
+            date_str = date_from_message_ts(best.get("ts", 0))
+    else:
+        # Выбираем кандидата с наивысшим score
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+        
+        print(f"\nFound {len(candidates)} candidates:")
+        for i, c in enumerate(candidates[:5]):  # Показываем топ-5
+            msg_dt = datetime.fromtimestamp(c['msg']['ts'], tz=timezone.utc)
+            print(f"  {i+1}. Score={c['score']}, Date={c['date']}, Time={msg_dt}, Post={c['msg'].get('post')}")
+            print(f"     Preview: {c['msg']['text'][:80]}...")
+        
+        best = candidates[0]['msg']
+        date_str = candidates[0]['date']
 
-    if best is None:
-        raise RuntimeError("No suitable post found in last LOOKBACK messages")
-
-    print(f"\nSelected post ID: {best.get('post')}")
+    print(f"\n🎯 Selected post ID: {best.get('post')}")
     print(f"Post timestamp: {datetime.fromtimestamp(best.get('ts', 0), tz=timezone.utc)}")
+    print(f"Post date: {date_str}")
     print(f"Post preview:\n{best['text'][:300]}...\n")
 
     groups = parse_groups(best["text"])
     print(f"Parsed {len(groups)} groups: {list(groups.keys())}")
 
-    # ДАТА: 1) из текста поста, 2) из времени поста, 3) текущая
-    date_str = extract_date_from_text(best["text"])
-    if not date_str:
-        date_str = date_from_message_ts(best.get("ts", 0))
-    
-    print(f"Extracted date: {date_str}")
-
     existing = load_existing()
     old_groups = existing.get("groups", {})
     old_date = existing.get("date")
 
-    if old_groups == groups and (not UPDATE_IF_DATE_CHANGED or old_date == date_str):
-        print("Groups (and date) unchanged -> no update.")
+    # Проверяем нужно ли обновление
+    groups_changed = old_groups != groups
+    date_changed = old_date != date_str
+    
+    if not groups_changed and not date_changed:
+        print("✅ Groups and date unchanged -> no update needed.")
         return
+    
+    if groups_changed:
+        print(f"📝 Groups changed: {len(old_groups)} -> {len(groups)}")
+    
+    if date_changed:
+        print(f"📅 Date changed: {old_date} -> {date_str}")
 
     save_schedule(groups, date_str)
     
