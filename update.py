@@ -19,9 +19,8 @@ KEYWORDS = [k.strip().lower() for k in os.getenv(
     "онов,оновив,оновились,график,графіки,графік,дтек,yasno,відключення,відключення світла,черга,група"
 ).split(",") if k.strip()]
 
-LOOKBACK = int(os.getenv("TG_LOOKBACK", "200"))  # Увеличено с 80 до 200
+LOOKBACK = int(os.getenv("TG_LOOKBACK", "200"))
 
-# Если хочешь коммитить даже при тех же группах, но новая дата — 1
 UPDATE_IF_DATE_CHANGED = os.getenv("UPDATE_IF_DATE_CHANGED", "0") == "1"
 
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")
@@ -46,7 +45,6 @@ def git_push_if_changed():
         run(["git", "add", SCHEDULE_PATH])
         run(["git", "commit", "-m", f"update schedule {date.today()}"])
 
-        # Pull перед push чтобы избежать конфликтов
         try:
             run(["git", "pull", "--rebase"])
         except subprocess.CalledProcessError:
@@ -89,7 +87,6 @@ def fetch_with_retry(url: str, retries: int = 3):
     
     for i in range(retries):
         try:
-            # Добавляем timestamp чтобы обойти кэш
             cache_buster = f"?_={int(time.time() * 1000)}"
             headers = {
                 'User-Agent': user_agents[i % len(user_agents)],
@@ -114,73 +111,28 @@ def fetch_with_retry(url: str, retries: int = 3):
 
 # ====== Telegram HTML parsing ======
 def extract_messages(page_html: str):
-    """
-    Улучшенный парсер с поддержкой разных вариантов HTML структуры Telegram
-    """
+    """Улучшенный парсер с поддержкой разных вариантов HTML структуры Telegram"""
     msgs = []
     
-    # Пробуем найти все div с классом tgme_widget_message
-    # Используем более гибкий паттерн
-    message_divs = re.findall(
-        r'<div[^>]*class="[^"]*tgme_widget_message[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+    # Ищем блоки с data-post
+    post_blocks = re.finditer(
+        r'data-post="([^"]+)".*?<div[^>]*class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>',
         page_html,
         re.S
     )
     
-    # Если не нашли, пробуем альтернативный паттерн
-    if not message_divs:
-        message_divs = re.findall(
-            r'<div[^>]*data-post="[^"]+?"[^>]*>(.*?)</section>',
-            page_html,
-            re.S
-        )
-    
-    # Если всё ещё ничего не нашли, пробуем искать по data-post напрямую
-    if not message_divs:
-        # Ищем блоки с data-post
-        post_blocks = re.finditer(
-            r'data-post="([^"]+)"[^>]*>.*?data-unixtime="(\d+)".*?<div[^>]*class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>',
-            page_html,
-            re.S
-        )
+    for match in post_blocks:
+        post_id = match.group(1)
+        text_html = match.group(2)
         
-        for match in post_blocks:
-            post_id = match.group(1)
-            ts = int(match.group(2))
-            text_html = match.group(3)
-            
-            # Очистка HTML
-            text_html = text_html.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-            text_plain = re.sub(r"<.*?>", "", text_html)
-            text_plain = html.unescape(text_plain).strip()
-            
-            if text_plain:
-                msgs.append({"ts": ts, "post": post_id, "text": text_plain})
+        # Ищем timestamp в окрестностях (ищем в 1000 символах до match)
+        start_pos = max(0, match.start() - 1000)
+        context = page_html[start_pos:match.end()]
         
-        if msgs:
-            msgs.sort(key=lambda x: x["ts"])
-            return msgs
-    
-    # Обработка найденных блоков (старый метод)
-    for block in message_divs:
-        # Извлекаем timestamp
-        m_ts = re.search(r'data-unixtime="(\d+)"', block)
+        m_ts = re.search(r'data-unixtime="(\d+)"', context)
         ts = int(m_ts.group(1)) if m_ts else 0
         
-        # Извлекаем post ID
-        m_post = re.search(r'data-post="([^"]+)"', block)
-        post_id = m_post.group(1) if m_post else ""
-        
-        # Извлекаем текст сообщения
-        m_text = re.search(r'<div[^>]*class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', block, re.S)
-        if not m_text:
-            # Пробуем альтернативный паттерн
-            m_text = re.search(r'class="js-message_text[^"]*"[^>]*>(.*?)</div>', block, re.S)
-        
-        if not m_text:
-            continue
-        
-        text_html = m_text.group(1)
+        # Очистка HTML
         text_html = text_html.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
         text_plain = re.sub(r"<.*?>", "", text_html)
         text_plain = html.unescape(text_plain).strip()
@@ -193,10 +145,13 @@ def extract_messages(page_html: str):
 
 
 def has_group_lines(text: str) -> bool:
-    return bool(re.search(r'(^|\n)\s*\d+\.\d+\s*[-–—]\s*\d{2}:\d{2}\s*-\s*(\d{2}:\d{2}|24:00)', text))
+    """Проверяет наличие строк с группами отключений"""
+    # Паттерны: "1.1 03:00" или "1.1 - 08:00"
+    return bool(re.search(r'(^|\n)\s*\d+\.\d+\s+\d{2}:\d{2}', text, re.MULTILINE))
 
 
 def has_keywords(text: str) -> bool:
+    """Проверяет наличие ключевых слов"""
     low = text.lower()
     return any(k in low for k in KEYWORDS)
 
@@ -215,44 +170,28 @@ def parse_groups(text: str) -> dict:
     for line in norm.splitlines():
         line = line.strip()
         # Убираем эмодзи и маркеры
-        line = line.lstrip("•").lstrip("🔴").lstrip("❌").lstrip("-").strip()
+        line = re.sub(r'^[•🔴❌\-\s]+', '', line)
         
-        # Паттерн 1: "1.1 03:00 - 10:00 / 13:30 - 20:30"
-        m = re.match(r"^(\d+\.\d+)\s+(.+)$", line)
+        # Паттерн: "1.1 03:00 - 10:00 / 13:30 - 20:30"
+        m = re.match(r'^(\d+\.\d+)\s+(.+)$', line)
         if not m:
             continue
 
         group_id = m.group(1)
         rest = m.group(2).strip()
         
-        # Убираем все после двоеточия или тире в начале
-        rest = re.sub(r"^[-:]\s*", "", rest)
-        
-        # Разделяем интервалы по /, ; или запятой
-        parts = [p.strip() for p in re.split(r"[/;,]", rest) if p.strip()]
+        # Разделяем интервалы по / или ;
+        parts = [p.strip() for p in re.split(r'[/;]', rest) if p.strip()]
         
         intervals = []
         for part in parts:
-            # Убираем пробелы вокруг тире
-            part = re.sub(r"\s*-\s*", "-", part)
-            # Убираем лишние пробелы
-            part = re.sub(r"\s+", " ", part).strip()
+            # Ищем все времена в формате HH:MM
+            times = re.findall(r'\d{2}:\d{2}', part)
             
-            # Ищем паттерны времени
-            # Формат: 03:00-10:00 или 03:00 - 10:00
-            time_matches = re.findall(r"\d{2}:\d{2}", part)
-            
-            if len(time_matches) >= 2:
-                # Создаём интервалы из пар времён
-                for i in range(0, len(time_matches), 2):
-                    if i + 1 < len(time_matches):
-                        interval = f"{time_matches[i]}-{time_matches[i+1]}"
-                        intervals.append(interval)
-            elif len(time_matches) == 1:
-                # Если только одно время, возможно формат "до 24:00"
-                if "24:00" in part or "00:00" in part:
-                    interval = f"{time_matches[0]}-24:00"
-                    intervals.append(interval)
+            # Создаём интервалы из пар времён
+            for i in range(0, len(times) - 1, 2):
+                interval = f"{times[i]}-{times[i+1]}"
+                intervals.append(interval)
 
         if intervals:
             groups[group_id] = intervals
@@ -280,14 +219,7 @@ MONTHS_UA_RU = {
 }
 
 def extract_date_from_text(text: str) -> str | None:
-    """
-    Пытаемся найти дату в тексте поста и вернуть YYYY-MM-DD.
-    Поддержка:
-      - 24.01.2026 / 24/01/2026 / 24-01-2026
-      - 24.01 (год берём текущий)
-      - 24 січня 2026 / 24 января 2026
-      - 24 січня (год текущий)
-    """
+    """Извлекает дату из текста поста"""
     t = text.lower()
 
     # 1) dd.mm.yyyy / dd-mm-yyyy / dd/mm/yyyy
@@ -339,19 +271,14 @@ def extract_date_from_text(text: str) -> str | None:
 
 
 def date_from_message_ts(ts: int) -> str:
-    if ts:
-        # ts в UTC, но для даты нам достаточно локального дня (Kyiv).
-        # Простейший способ без pytz: применим фиксированный сдвиг +2/+3 сложно.
-        # Поэтому используем UTC-дату как fallback — обычно совпадает.
+    if ts and ts > 1000000000:
         return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
     return date.today().isoformat()
 
 
 def main():
-    # Используем улучшенный fetch
     page = fetch_with_retry(TG_URL)
     
-    # Сохраняем HTML для отладки (опционально)
     debug_mode = os.getenv("DEBUG_HTML", "0") == "1"
     if debug_mode:
         with open("debug_page.html", "w", encoding="utf-8") as f:
@@ -360,24 +287,14 @@ def main():
 
     msgs = extract_messages(page)
     if not msgs:
-        # Сохраняем HTML при ошибке для анализа
         with open("error_page.html", "w", encoding="utf-8") as f:
             f.write(page)
         print("ERROR: Saved failing page to error_page.html for analysis")
-        
-        # Попробуем найти хоть что-то с data-post
-        data_posts = re.findall(r'data-post="([^"]+)"', page)
-        print(f"Found {len(data_posts)} data-post attributes in HTML")
-        
-        # Попробуем найти message_text
-        text_divs = re.findall(r'class="[^"]*message_text[^"]*"', page)
-        print(f"Found {len(text_divs)} message_text divs in HTML")
-        
-        raise RuntimeError("No messages parsed from t.me/s page (maybe blocked or HTML changed)")
+        raise RuntimeError("No messages parsed from t.me/s page")
 
-    # Логирование для диагностики
     print(f"Total messages parsed: {len(msgs)}")
     print(f"Checking last {min(LOOKBACK, len(msgs))} messages...")
+    
     if msgs:
         latest_msg = msgs[-1]
         ts = latest_msg.get('ts', 0)
@@ -389,41 +306,30 @@ def main():
         print(f"Latest message post ID: {latest_msg.get('post')}")
         print(f"Latest message preview: {latest_msg['text'][:150]}...")
 
-    # НОВАЯ ЛОГИКА: ищем самый свежий график (убираем фильтр по timestamp)
-    now = datetime.now(timezone.utc)
+    # Собираем кандидатов
     today = date.today()
     tomorrow = today + timedelta(days=1)
-    
     candidates = []
     
-    # Собираем все подходящие посты
     for m in reversed(msgs[-LOOKBACK:]):
-        # Проверяем наличие групп
         if not has_group_lines(m["text"]):
             continue
         
-        # Извлекаем дату из поста
         post_date = extract_date_from_text(m["text"])
         if not post_date:
-            # Если дата не найдена, пробуем из timestamp
-            if m.get('ts', 0) > 0:
+            if m.get('ts', 0) > 1000000000:
                 post_date = date_from_message_ts(m['ts'])
             else:
-                # Если timestamp тоже невалидный, используем сегодня
                 post_date = today.isoformat()
         
-        # Добавляем в кандидаты
         score = 0
         
-        # Бонус за наличие ключевых слов
         if has_keywords(m["text"]):
             score += 1000
         
-        # Бонус за валидный timestamp (свежие сообщения)
-        if m.get('ts', 0) > 1000000000:  # Валидный Unix timestamp
-            score += m['ts'] // 1000  # Делим чтобы не переполнить
+        if m.get('ts', 0) > 1000000000:
+            score += m['ts'] // 1000
         
-        # БОЛЬШОЙ бонус если дата в посте = сегодня или завтра
         try:
             post_date_obj = date.fromisoformat(post_date)
             if post_date_obj == today:
@@ -431,12 +337,10 @@ def main():
             elif post_date_obj == tomorrow:
                 score += 50000
             elif post_date_obj > tomorrow:
-                # Будущие даты менее приоритетны
                 score += 10000
         except:
             pass
         
-        # Бонус за длину текста (более детальные графики)
         score += len(m["text"]) // 10
         
         candidates.append({
@@ -446,43 +350,22 @@ def main():
         })
     
     if not candidates:
-        print("WARNING: No candidates found in last 24 hours, falling back to old logic")
-        # Старая логика как fallback
-        best = None
-        for m in reversed(msgs[-LOOKBACK:]):
-            if has_group_lines(m["text"]) and has_keywords(m["text"]):
-                best = m
-                break
-        
-        if best is None:
-            for m in reversed(msgs[-LOOKBACK:]):
-                if has_group_lines(m["text"]):
-                    print("WARNING: no keyword match; using latest post that contains group lines")
-                    best = m
-                    break
-        
-        if best is None:
-            raise RuntimeError("No suitable post found in last LOOKBACK messages")
-        
-        date_str = extract_date_from_text(best["text"])
-        if not date_str:
-            date_str = date_from_message_ts(best.get("ts", 0))
-    else:
-        # Выбираем кандидата с наивысшим score
-        candidates.sort(key=lambda x: x['score'], reverse=True)
-        
-        print(f"\nFound {len(candidates)} candidates:")
-        for i, c in enumerate(candidates[:5]):  # Показываем топ-5
-            ts = c['msg'].get('ts', 0)
-            if ts > 1000000000:
-                msg_dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M')
-            else:
-                msg_dt = "INVALID_TS"
-            print(f"  {i+1}. Score={c['score']}, Date={c['date']}, Time={msg_dt}, Post={c['msg'].get('post')}")
-            print(f"     Preview: {c['msg']['text'][:80]}...")
-        
-        best = candidates[0]['msg']
-        date_str = candidates[0]['date']
+        raise RuntimeError("No posts with schedules found")
+    
+    candidates.sort(key=lambda x: x['score'], reverse=True)
+    
+    print(f"\nFound {len(candidates)} candidates:")
+    for i, c in enumerate(candidates[:5]):
+        ts = c['msg'].get('ts', 0)
+        if ts > 1000000000:
+            msg_dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M')
+        else:
+            msg_dt = "INVALID_TS"
+        print(f"  {i+1}. Score={c['score']}, Date={c['date']}, Time={msg_dt}, Post={c['msg'].get('post')}")
+        print(f"     Preview: {c['msg']['text'][:80]}...")
+    
+    best = candidates[0]['msg']
+    date_str = candidates[0]['date']
 
     print(f"\n🎯 Selected post ID: {best.get('post')}")
     ts = best.get('ts', 0)
@@ -500,7 +383,6 @@ def main():
     old_groups = existing.get("groups", {})
     old_date = existing.get("date")
 
-    # Проверяем нужно ли обновление
     groups_changed = old_groups != groups
     date_changed = old_date != date_str
     
@@ -515,11 +397,12 @@ def main():
         print(f"📅 Date changed: {old_date} -> {date_str}")
 
     save_schedule(groups, date_str)
-    
-    # Git push теперь делает workflow, не скрипт
-    # git_push_if_changed()
 
-    print(f"\n✅ Updated from channel={CHANNEL}, post={best.get('post')}, ts={best.get('ts')}, date={date_str}")
+    print(f"\n✅ Schedule saved to {SCHEDULE_PATH}")
+    print(f"Channel: {CHANNEL}")
+    print(f"Post: {best.get('post')}")
+    print(f"Date: {date_str}")
+    print(f"Groups: {len(groups)}")
 
 if __name__ == "__main__":
     main()
