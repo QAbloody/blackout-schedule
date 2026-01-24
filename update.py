@@ -377,28 +377,27 @@ def main():
 
     # Логирование для диагностики
     print(f"Total messages parsed: {len(msgs)}")
-    print(f"Checking last {LOOKBACK} messages...")
+    print(f"Checking last {min(LOOKBACK, len(msgs))} messages...")
     if msgs:
         latest_msg = msgs[-1]
-        latest_dt = datetime.fromtimestamp(latest_msg['ts'], tz=timezone.utc)
-        print(f"Latest message timestamp: {latest_dt} UTC")
+        ts = latest_msg.get('ts', 0)
+        if ts > 1000000000:
+            latest_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            print(f"Latest message timestamp: {latest_dt} UTC (ts={ts})")
+        else:
+            print(f"Latest message timestamp: INVALID (ts={ts})")
         print(f"Latest message post ID: {latest_msg.get('post')}")
         print(f"Latest message preview: {latest_msg['text'][:150]}...")
 
-    # НОВАЯ ЛОГИКА: ищем самый свежий график за последние 24 часа
+    # НОВАЯ ЛОГИКА: ищем самый свежий график (убираем фильтр по timestamp)
     now = datetime.now(timezone.utc)
-    one_day_ago = now - timedelta(days=1)
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
     
     candidates = []
     
     # Собираем все подходящие посты
     for m in reversed(msgs[-LOOKBACK:]):
-        msg_time = datetime.fromtimestamp(m['ts'], tz=timezone.utc)
-        
-        # Пропускаем сообщения старше 24 часов
-        if msg_time < one_day_ago:
-            continue
-        
         # Проверяем наличие групп
         if not has_group_lines(m["text"]):
             continue
@@ -406,29 +405,39 @@ def main():
         # Извлекаем дату из поста
         post_date = extract_date_from_text(m["text"])
         if not post_date:
-            post_date = date_from_message_ts(m.get("ts", 0))
+            # Если дата не найдена, пробуем из timestamp
+            if m.get('ts', 0) > 0:
+                post_date = date_from_message_ts(m['ts'])
+            else:
+                # Если timestamp тоже невалидный, используем сегодня
+                post_date = today.isoformat()
         
         # Добавляем в кандидаты
         score = 0
         
         # Бонус за наличие ключевых слов
         if has_keywords(m["text"]):
-            score += 100
+            score += 1000
         
-        # Бонус за свежесть (последние сообщения важнее)
-        score += m['ts']
+        # Бонус за валидный timestamp (свежие сообщения)
+        if m.get('ts', 0) > 1000000000:  # Валидный Unix timestamp
+            score += m['ts'] // 1000  # Делим чтобы не переполнить
         
-        # Бонус если дата в посте = сегодня или завтра
-        today = date.today()
-        tomorrow = today + timedelta(days=1)
+        # БОЛЬШОЙ бонус если дата в посте = сегодня или завтра
         try:
             post_date_obj = date.fromisoformat(post_date)
             if post_date_obj == today:
-                score += 1000
+                score += 100000
             elif post_date_obj == tomorrow:
-                score += 500
+                score += 50000
+            elif post_date_obj > tomorrow:
+                # Будущие даты менее приоритетны
+                score += 10000
         except:
             pass
+        
+        # Бонус за длину текста (более детальные графики)
+        score += len(m["text"]) // 10
         
         candidates.append({
             'msg': m,
@@ -464,7 +473,11 @@ def main():
         
         print(f"\nFound {len(candidates)} candidates:")
         for i, c in enumerate(candidates[:5]):  # Показываем топ-5
-            msg_dt = datetime.fromtimestamp(c['msg']['ts'], tz=timezone.utc)
+            ts = c['msg'].get('ts', 0)
+            if ts > 1000000000:
+                msg_dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M')
+            else:
+                msg_dt = "INVALID_TS"
             print(f"  {i+1}. Score={c['score']}, Date={c['date']}, Time={msg_dt}, Post={c['msg'].get('post')}")
             print(f"     Preview: {c['msg']['text'][:80]}...")
         
@@ -472,7 +485,11 @@ def main():
         date_str = candidates[0]['date']
 
     print(f"\n🎯 Selected post ID: {best.get('post')}")
-    print(f"Post timestamp: {datetime.fromtimestamp(best.get('ts', 0), tz=timezone.utc)}")
+    ts = best.get('ts', 0)
+    if ts > 1000000000:
+        print(f"Post timestamp: {datetime.fromtimestamp(ts, tz=timezone.utc)}")
+    else:
+        print(f"Post timestamp: INVALID (ts={ts})")
     print(f"Post date: {date_str}")
     print(f"Post preview:\n{best['text'][:300]}...\n")
 
