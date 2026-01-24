@@ -375,15 +375,29 @@ def main():
 
     groups = parse_groups(best["text"])
     print(f"Parsed {len(groups)} groups: {list(groups.keys())}")
+    
+    # Конвертируем дату для сравнения и сохранения
+    try:
+        date_obj = date.fromisoformat(date_str)
+        formatted_date = date_obj.strftime("%d.%m.%Y")
+    except:
+        formatted_date = date_str
 
     existing = load_existing()
     old_groups = existing.get("groups", {})
     old_date = existing.get("date")
 
     groups_changed = old_groups != groups
-    date_changed = old_date != date_str
     
-    if not groups_changed and not date_changed:
+    # Проверяем формат даты - если старый (YYYY-MM-DD), нужно обновить
+    date_format_changed = False
+    if old_date and "-" in old_date:  # Старый формат YYYY-MM-DD
+        date_format_changed = True
+        print(f"📅 Detected old date format: {old_date}, will update to new format")
+    
+    date_changed = old_date != date_str and old_date != formatted_date
+    
+    if not groups_changed and not date_changed and not date_format_changed:
         print("✅ No changes")
         return
     
@@ -391,27 +405,32 @@ def main():
         print(f"📝 Groups changed: {len(old_groups)} -> {len(groups)}")
     
     if date_changed:
-        print(f"📅 Date changed: {old_date} -> {date_str}")
+        print(f"📅 Date changed: {old_date} -> {formatted_date}")
+    
+    if date_format_changed:
+        print(f"📅 Date format updated: {old_date} -> {formatted_date}")
 
-    formatted_date = save_schedule(groups, date_str)
+    saved_date = save_schedule(groups, date_str)
 
     # Отправляем уведомление
-    if groups_changed or date_changed:
+    if groups_changed or date_changed or date_format_changed:
         msg = f"🔔 <b>Обновление графика ДТЭК</b>\n\n"
-        msg += f"📅 Дата: <b>{formatted_date}</b>\n"
+        msg += f"📅 Дата: <b>{saved_date}</b>\n"
         msg += f"📊 Групп: <b>{len(groups)}</b>\n\n"
         
         if groups_changed:
             msg += "📝 <b>Изменились группы</b>\n"
         if date_changed:
-            msg += f"📅 <b>Дата:</b> {old_date} → {formatted_date}\n"
+            msg += f"📅 <b>Дата изменилась:</b> {old_date} → {saved_date}\n"
+        if date_format_changed:
+            msg += f"✨ <b>Обновлён формат даты</b>\n"
         
         msg += f"\n🔗 <a href='https://t.me/s/{CHANNEL}'>Канал ДТЭК</a>"
         
         send_telegram_notification(msg)
 
     print(f"\n✅ Schedule saved!")
-    print(f"Date: {formatted_date}, Groups: {len(groups)}")
+    print(f"Date: {saved_date}, Groups: {len(groups)}")
 
 
 if __name__ == "__main__":
