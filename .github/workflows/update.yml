@@ -1,56 +1,105 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ДТЭК График - GitHub Actions Workflow
+# Автоматически проверяет канал Telegram и обновляет schedule.json
+# ═══════════════════════════════════════════════════════════════════════════════
+
 name: Update Schedule
 
 on:
   schedule:
-    - cron: '5 * * * *'
+    # Каждые 30 минут (в :05 и :35 каждого часа)
+    - cron: '5,35 * * * *'
+  
+  # Ручной запуск через GitHub UI
   workflow_dispatch:
+  
+  # Запуск при пуше в main (опционально)
   push:
     branches:
       - main
+    paths:
+      - 'update.py'
+      - '.github/workflows/update.yml'
 
 jobs:
   update:
+    name: Check and update schedule
     runs-on: ubuntu-latest
+    
     permissions:
-      contents: write  # Явно даём права на запись
+      contents: write  # Необходимо для коммита изменений
     
     steps:
-      - name: Checkout repository
+      # ─────────────────────────────────────────────────────────────────────────
+      # Подготовка
+      # ─────────────────────────────────────────────────────────────────────────
+      
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
-      - name: Set up Python
+      - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
       
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests
       
-      - name: Run update script
+      # ─────────────────────────────────────────────────────────────────────────
+      # Запуск парсера
+      # ─────────────────────────────────────────────────────────────────────────
+      
+      - name: 🔍 Run update script
         env:
           TG_CHANNEL: dnepr_svet_voda
           SCHEDULE_PATH: schedule.json
           TIMEZONE: Europe/Kyiv
           TG_LOOKBACK: "200"
-          UPDATE_IF_DATE_CHANGED: "1"
-        run: python update.py || true  # Продолжить даже если скрипт упал
+          DEBUG_HTML: "1"
+          # Telegram уведомления (опционально)
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python update.py || true
+        continue-on-error: true
       
-      - name: Commit and push if changed
+      # ─────────────────────────────────────────────────────────────────────────
+      # Коммит изменений
+      # ─────────────────────────────────────────────────────────────────────────
+      
+      - name: 💾 Commit and push changes
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Добавляем только schedule.json
           git add schedule.json
-          git diff --staged --quiet || git commit -m "Update schedule $(date -u +%Y-%m-%d)"
-          git push || echo "Nothing to push"
+          
+          # Коммитим только если есть изменения
+          if git diff --staged --quiet; then
+            echo "✅ No changes to commit"
+          else
+            git commit -m "🔄 Update schedule $(date -u +%Y-%m-%d\ %H:%M\ UTC)"
+            git push
+            echo "✅ Changes pushed successfully"
+          fi
       
-      - name: Upload schedule.json as artifact
+      # ─────────────────────────────────────────────────────────────────────────
+      # Сохранение артефактов для отладки
+      # ─────────────────────────────────────────────────────────────────────────
+      
+      - name: 📤 Upload debug artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: schedule-${{ github.run_number }}
-          path: schedule.json
-          retention-days: 7
+          name: debug-files-${{ github.run_number }}
+          path: |
+            schedule.json
+            debug_page.html
+            error_page.html
+          retention-days: 3
+          if-no-files-found: ignore
