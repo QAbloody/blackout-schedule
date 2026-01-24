@@ -1,4 +1,42 @@
-import os
+def extract_date_from_text(text: str) -> str | None:
+    """Извлекает дату из текста поста"""
+    t = text.lower()
+
+    # 1) dd.mm.yyyy / dd-mm-yyyy / dd/mm/yyyy
+    m = re.search(r'(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})', t)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return date(y, mo, d).isoformat()
+        except Exception:
+            pass
+
+    # 2) dd.mm (год текущий)
+    m = re.search(r'(\d{1,2})[.\-/](\d{1,2})(?!\d)', t)
+    if m:
+        d, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= d <= 31 and 1 <= mo <= 12:
+            y = date.today().year
+            try:
+                return date(y, mo, d).isoformat()
+            except Exception:
+                pass
+
+    # 3) "24 січня 2026" / "24 января 2026"
+    m = re.search(r'\b(\d{1,2})\s+([а-яіїє]+)\s+(\d{4})\b', t)
+    if m:
+        d = int(m.group(1))
+        mon_name = m.group(2)
+        y = int(m.group(3))
+        mo = MONTHS_UA_RU.get(mon_name)
+        if mo and 1 <= d <= 31:
+            try:
+                return date(y, mo, d).isoformat()
+            except Exception:
+                pass
+
+    # 4) "24 січня" (год текущий) - используем \b для границы слова
+    m = re.search(r'\b(\d{1,2}import os
 import re
 import json
 import html
@@ -261,9 +299,17 @@ def extract_date_from_text(text: str) -> str | None:
         mon_name = m.group(3)
         mo = MONTHS_UA_RU.get(mon_name)
         if mo:
-            y = date.today().year
+            today = date.today()
+            y = today.year
+            
+            # Если дата в прошлом (например, нашли "24 января" а сейчас конец января)
+            # и разница больше 20 дней - значит это следующий год
             try:
-                return date(y, mo, d).isoformat()
+                parsed_date = date(y, mo, d)
+                if parsed_date < today and (today - parsed_date).days > 20:
+                    y += 1
+                    parsed_date = date(y, mo, d)
+                return parsed_date.isoformat()
             except Exception:
                 pass
 
@@ -311,16 +357,25 @@ def main():
     tomorrow = today + timedelta(days=1)
     candidates = []
     
+    print(f"\n🔍 Analyzing posts for schedules...")
+    
     for m in reversed(msgs[-LOOKBACK:]):
         if not has_group_lines(m["text"]):
             continue
         
+        # Извлекаем дату с логированием
         post_date = extract_date_from_text(m["text"])
+        post_preview = m["text"][:100].replace('\n', ' ')
+        
         if not post_date:
             if m.get('ts', 0) > 1000000000:
                 post_date = date_from_message_ts(m['ts'])
+                print(f"  ⚠️  No date in text, using timestamp: {post_date} | {post_preview}...")
             else:
                 post_date = today.isoformat()
+                print(f"  ⚠️  No date found, using today: {post_date} | {post_preview}...")
+        else:
+            print(f"  ✅ Found date in text: {post_date} | {post_preview}...")
         
         score = 0
         
@@ -334,8 +389,10 @@ def main():
             post_date_obj = date.fromisoformat(post_date)
             if post_date_obj == today:
                 score += 100000
+                print(f"    📅 Date is TODAY - high priority!")
             elif post_date_obj == tomorrow:
                 score += 50000
+                print(f"    📅 Date is TOMORROW - medium priority")
             elif post_date_obj > tomorrow:
                 score += 10000
         except:
