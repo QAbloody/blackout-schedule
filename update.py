@@ -319,9 +319,29 @@ def date_from_message_ts(ts: int) -> str:
 def main():
     # Используем улучшенный fetch
     page = fetch_with_retry(TG_URL)
+    
+    # Сохраняем HTML для отладки (опционально)
+    debug_mode = os.getenv("DEBUG_HTML", "0") == "1"
+    if debug_mode:
+        with open("debug_page.html", "w", encoding="utf-8") as f:
+            f.write(page)
+        print("Debug: Saved page HTML to debug_page.html")
 
     msgs = extract_messages(page)
     if not msgs:
+        # Сохраняем HTML при ошибке для анализа
+        with open("error_page.html", "w", encoding="utf-8") as f:
+            f.write(page)
+        print("ERROR: Saved failing page to error_page.html for analysis")
+        
+        # Попробуем найти хоть что-то с data-post
+        data_posts = re.findall(r'data-post="([^"]+)"', page)
+        print(f"Found {len(data_posts)} data-post attributes in HTML")
+        
+        # Попробуем найти message_text
+        text_divs = re.findall(r'class="[^"]*message_text[^"]*"', page)
+        print(f"Found {len(text_divs)} message_text divs in HTML")
+        
         raise RuntimeError("No messages parsed from t.me/s page (maybe blocked or HTML changed)")
 
     # Логирование для диагностики
