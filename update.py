@@ -1,20 +1,7 @@
-# ====== НАСТРОЙКИ ======
-CHANNEL = os.getenv("TG_CHANNEL", "dnepr_svet_voda").strip()
-TG_URL = f"https://t.me/s/{CHANNEL}"
-SCHEDULE_PATH = os.getenv("SCHEDULE_PATH", "schedule.json")
-TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Kyiv")
-
-# Telegram уведомления
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
-
-KEYWORDS = [k.strip().lower() for k in os.getenv(
-    "TG_KEYWORDS",
-    "онов,оновimport os
+import os
 import re
 import json
 import html
-import subprocess
 import time
 from datetime import datetime, date, timezone, timedelta
 from random import randint
@@ -36,13 +23,7 @@ KEYWORDS = [k.strip().lower() for k in os.getenv(
 ).split(",") if k.strip()]
 
 LOOKBACK = int(os.getenv("TG_LOOKBACK", "200"))
-
-UPDATE_IF_DATE_CHANGED = os.getenv("UPDATE_IF_DATE_CHANGED", "0") == "1"
-
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")
-GITHUB_PAT = os.getenv("GITHUB_PAT", "")
-GIT_NAME = os.getenv("GIT_NAME", "Auto Updater")
-GIT_EMAIL = os.getenv("GIT_EMAIL", "auto@local")
 
 
 # ====== schedule helpers ======
@@ -52,8 +33,9 @@ def load_existing():
     with open(SCHEDULE_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
 def save_schedule(groups: dict, date_str: str):
-    # Конвертируем дату из YYYY-MM-DD в DD.MM.YYYY
+    """Сохраняет график с датой в формате DD.MM.YYYY"""
     try:
         date_obj = date.fromisoformat(date_str)
         formatted_date = date_obj.strftime("%d.%m.%Y")
@@ -63,13 +45,14 @@ def save_schedule(groups: dict, date_str: str):
     data = {"date": formatted_date, "timezone": TIMEZONE_NAME, "groups": groups}
     with open(SCHEDULE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    return formatted_date
 
 
-# ====== Telegram notifications ======
 def send_telegram_notification(message: str):
     """Отправляет уведомление в Telegram"""
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
-        print("⚠️  Telegram notifications not configured (TG_BOT_TOKEN or TG_CHAT_ID missing)")
+        print("⚠️  Telegram notifications not configured")
         return
     
     try:
@@ -77,7 +60,8 @@ def send_telegram_notification(message: str):
         payload = {
             "chat_id": TG_CHAT_ID,
             "text": message,
-            "parse_mode": "HTML"
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
         }
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
@@ -86,12 +70,12 @@ def send_telegram_notification(message: str):
         print(f"❌ Failed to send Telegram notification: {e}")
 
 
-# ====== Улучшенный fetch с обходом кэша ======
+# ====== Улучшенный fetch ======
 def fetch_with_retry(url: str, retries: int = 3):
     user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
     ]
     
     for i in range(retries):
@@ -101,9 +85,7 @@ def fetch_with_retry(url: str, retries: int = 3):
                 'User-Agent': user_agents[i % len(user_agents)],
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
                 'Pragma': 'no-cache',
-                'Expires': '0',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7'
+                'Expires': '0'
             }
             
             print(f"Fetching {url} (attempt {i+1}/{retries})...")
@@ -187,12 +169,12 @@ def parse_groups(text: str) -> dict:
             groups[group_id] = intervals
 
     if not groups:
-        raise RuntimeError("Parsed 0 groups from candidate post (format changed?)")
+        raise RuntimeError("Parsed 0 groups from candidate post")
     
     return groups
 
 
-# ====== Extract date from post text ======
+# ====== Extract date ======
 MONTHS_UA_RU = {
     "січня": 1, "января": 1,
     "лютого": 2, "февраля": 2,
@@ -208,21 +190,22 @@ MONTHS_UA_RU = {
     "грудня": 12, "декабря": 12,
 }
 
+
 def extract_date_from_text(text: str) -> str | None:
     t = text.lower()
     today = date.today()
 
-    # ПРИОРИТЕТ 1: dd.mm.yyyy
+    # 1. dd.mm.yyyy
     m = re.search(r'\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\b', t)
     if m:
         d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if 1 <= d <= 31 and 1 <= mo <= 12 and 2020 <= y <= 2030:
             try:
                 return date(y, mo, d).isoformat()
-            except Exception:
+            except:
                 pass
 
-    # ПРИОРИТЕТ 2: "24 січня 2026"
+    # 2. "24 січня 2026"
     m = re.search(r'\b(\d{1,2})\s+([а-яіїє]+)\s+(\d{4})\b', t)
     if m:
         d = int(m.group(1))
@@ -232,10 +215,10 @@ def extract_date_from_text(text: str) -> str | None:
         if mo and 1 <= d <= 31 and 2020 <= y <= 2030:
             try:
                 return date(y, mo, d).isoformat()
-            except Exception:
+            except:
                 pass
 
-    # ПРИОРИТЕТ 3: "на 24 січня"
+    # 3. "на 24 січня"
     m = re.search(r'\bна\s+(\d{1,2})\s+([а-яіїє]+)\b', t)
     if m:
         d = int(m.group(1))
@@ -249,10 +232,10 @@ def extract_date_from_text(text: str) -> str | None:
                     y += 1
                     parsed_date = date(y, mo, d)
                 return parsed_date.isoformat()
-            except Exception:
+            except:
                 pass
 
-    # ПРИОРИТЕТ 4: dd.mm
+    # 4. dd.mm
     m = re.search(r'\b(\d{1,2})[.\-/](\d{1,2})\b(?![.\-/\d])', t)
     if m:
         d, mo = int(m.group(1)), int(m.group(2))
@@ -264,10 +247,10 @@ def extract_date_from_text(text: str) -> str | None:
                     y += 1
                     parsed_date = date(y, mo, d)
                 return parsed_date.isoformat()
-            except Exception:
+            except:
                 pass
 
-    # ПРИОРИТЕТ 5: "24 січня"
+    # 5. "24 січня"
     m = re.search(r'\b(\d{1,2})\s+([а-яіїє]+)\b', t)
     if m:
         d = int(m.group(1))
@@ -281,7 +264,7 @@ def extract_date_from_text(text: str) -> str | None:
                     y += 1
                     parsed_date = date(y, mo, d)
                 return parsed_date.isoformat()
-            except Exception:
+            except:
                 pass
 
     return None
@@ -300,51 +283,49 @@ def main():
     if debug_mode:
         with open("debug_page.html", "w", encoding="utf-8") as f:
             f.write(page)
-        print("Debug: Saved page HTML to debug_page.html")
 
     msgs = extract_messages(page)
     if not msgs:
         with open("error_page.html", "w", encoding="utf-8") as f:
             f.write(page)
-        print("ERROR: Saved failing page to error_page.html for analysis")
-        raise RuntimeError("No messages parsed from t.me/s page")
+        raise RuntimeError("No messages parsed")
 
     print(f"Total messages parsed: {len(msgs)}")
     print(f"Checking last {min(LOOKBACK, len(msgs))} messages...")
     
     if msgs:
-        latest_msg = msgs[-1]
-        ts = latest_msg.get('ts', 0)
+        latest = msgs[-1]
+        ts = latest.get('ts', 0)
         if ts > 1000000000:
-            latest_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-            print(f"Latest message timestamp: {latest_dt} UTC (ts={ts})")
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            print(f"Latest: {dt} UTC (ts={ts})")
         else:
-            print(f"Latest message timestamp: INVALID (ts={ts})")
-        print(f"Latest message post ID: {latest_msg.get('post')}")
-        print(f"Latest message preview: {latest_msg['text'][:150]}...")
+            print(f"Latest: INVALID (ts={ts})")
+        print(f"Post ID: {latest.get('post')}")
+        print(f"Preview: {latest['text'][:100]}...")
 
     today = date.today()
     tomorrow = today + timedelta(days=1)
     candidates = []
     
-    print(f"\n🔍 Analyzing posts for schedules...")
+    print(f"\n🔍 Analyzing posts...")
     
     for m in reversed(msgs[-LOOKBACK:]):
         if not has_group_lines(m["text"]):
             continue
         
         post_date = extract_date_from_text(m["text"])
-        post_preview = m["text"][:100].replace('\n', ' ')
+        preview = m["text"][:80].replace('\n', ' ')
         
         if not post_date:
             if m.get('ts', 0) > 1000000000:
                 post_date = date_from_message_ts(m['ts'])
-                print(f"  ⚠️  No date in text, using timestamp: {post_date} | {post_preview}...")
+                print(f"  ⚠️  Using timestamp: {post_date} | {preview}...")
             else:
                 post_date = today.isoformat()
-                print(f"  ⚠️  No date found, using today: {post_date} | {post_preview}...")
+                print(f"  ⚠️  Using today: {post_date} | {preview}...")
         else:
-            print(f"  ✅ Found date in text: {post_date} | {post_preview}...")
+            print(f"  ✅ Date from text: {post_date} | {preview}...")
         
         score = 0
         
@@ -355,25 +336,21 @@ def main():
             score += m['ts'] // 1000
         
         try:
-            post_date_obj = date.fromisoformat(post_date)
-            if post_date_obj == today:
+            pd = date.fromisoformat(post_date)
+            if pd == today:
                 score += 100000
-                print(f"    📅 Date is TODAY - high priority!")
-            elif post_date_obj == tomorrow:
+                print(f"    📅 TODAY - high priority!")
+            elif pd == tomorrow:
                 score += 50000
-                print(f"    📅 Date is TOMORROW - medium priority")
-            elif post_date_obj > tomorrow:
+                print(f"    📅 TOMORROW")
+            elif pd > tomorrow:
                 score += 10000
         except:
             pass
         
         score += len(m["text"]) // 10
         
-        candidates.append({
-            'msg': m,
-            'score': score,
-            'date': post_date
-        })
+        candidates.append({'msg': m, 'score': score, 'date': post_date})
     
     if not candidates:
         raise RuntimeError("No posts with schedules found")
@@ -384,23 +361,17 @@ def main():
     for i, c in enumerate(candidates[:5]):
         ts = c['msg'].get('ts', 0)
         if ts > 1000000000:
-            msg_dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M')
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M')
         else:
-            msg_dt = "INVALID_TS"
-        print(f"  {i+1}. Score={c['score']}, Date={c['date']}, Time={msg_dt}, Post={c['msg'].get('post')}")
-        print(f"     Preview: {c['msg']['text'][:80]}...")
+            dt = "INVALID"
+        print(f"  {i+1}. Score={c['score']}, Date={c['date']}, Time={dt}")
+        print(f"     Post={c['msg'].get('post')}, Preview={c['msg']['text'][:60]}...")
     
     best = candidates[0]['msg']
     date_str = candidates[0]['date']
 
-    print(f"\n🎯 Selected post ID: {best.get('post')}")
-    ts = best.get('ts', 0)
-    if ts > 1000000000:
-        print(f"Post timestamp: {datetime.fromtimestamp(ts, tz=timezone.utc)}")
-    else:
-        print(f"Post timestamp: INVALID (ts={ts})")
-    print(f"Post date: {date_str}")
-    print(f"Post preview:\n{best['text'][:300]}...\n")
+    print(f"\n🎯 Selected: {best.get('post')}")
+    print(f"Date: {date_str}")
 
     groups = parse_groups(best["text"])
     print(f"Parsed {len(groups)} groups: {list(groups.keys())}")
@@ -413,45 +384,35 @@ def main():
     date_changed = old_date != date_str
     
     if not groups_changed and not date_changed:
-        print("✅ Groups and date unchanged -> no update needed.")
+        print("✅ No changes")
         return
     
     if groups_changed:
         print(f"📝 Groups changed: {len(old_groups)} -> {len(groups)}")
     
     if date_changed:
-        print(f"📅 Date changed: {old_date} -> {formatted_date}")
+        print(f"📅 Date changed: {old_date} -> {date_str}")
 
-    save_schedule(groups, date_str)
+    formatted_date = save_schedule(groups, date_str)
 
-    # Отправляем уведомление в Telegram
+    # Отправляем уведомление
     if groups_changed or date_changed:
-        # Конвертируем дату для сообщения
-        try:
-            date_obj = date.fromisoformat(date_str)
-            formatted_date = date_obj.strftime("%d.%m.%Y")
-        except:
-            formatted_date = date_str
-        
-        message = f"🔔 <b>Обновление графика ДТЭК</b>\n\n"
-        message += f"📅 Дата: <b>{formatted_date}</b>\n"
-        message += f"📊 Групп: <b>{len(groups)}</b>\n\n"
+        msg = f"🔔 <b>Обновление графика ДТЭК</b>\n\n"
+        msg += f"📅 Дата: <b>{formatted_date}</b>\n"
+        msg += f"📊 Групп: <b>{len(groups)}</b>\n\n"
         
         if groups_changed:
-            message += "📝 <b>Изменились группы отключений</b>\n"
+            msg += "📝 <b>Изменились группы</b>\n"
         if date_changed:
-            message += f"📅 <b>Дата изменилась:</b> {old_date} → {formatted_date}\n"
+            msg += f"📅 <b>Дата:</b> {old_date} → {formatted_date}\n"
         
-        message += f"\n🔗 <a href='https://t.me/s/{CHANNEL}'>Источник</a>"
-        message += f"\n📂 <a href='https://github.com/{GITHUB_REPO.split('/')[-2]}/{GITHUB_REPO.split('/')[-1]}/blob/main/schedule.json'>schedule.json</a>"
+        msg += f"\n🔗 <a href='https://t.me/s/{CHANNEL}'>Канал ДТЭК</a>"
         
-        send_telegram_notification(message)
+        send_telegram_notification(msg)
 
-    print(f"\n✅ Schedule saved to {SCHEDULE_PATH}")
-    print(f"Channel: {CHANNEL}")
-    print(f"Post: {best.get('post')}")
-    print(f"Date: {formatted_date}")
-    print(f"Groups: {len(groups)}")
+    print(f"\n✅ Schedule saved!")
+    print(f"Date: {formatted_date}, Groups: {len(groups)}")
+
 
 if __name__ == "__main__":
     main()
