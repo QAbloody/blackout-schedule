@@ -35,21 +35,33 @@ def run(cmd: list[str]):
     subprocess.check_call(cmd)
 
 def git_push_if_changed():
-    status = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
-    if not status:
-        print("No changes to commit.")
-        return
+    try:
+        status = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+        if not status:
+            print("No changes to commit.")
+            return
 
-    run(["git", "config", "user.name", GIT_NAME])
-    run(["git", "config", "user.email", GIT_EMAIL])
-    run(["git", "add", SCHEDULE_PATH])
-    run(["git", "commit", "-m", f"update schedule {date.today()}"])
+        run(["git", "config", "user.name", GIT_NAME])
+        run(["git", "config", "user.email", GIT_EMAIL])
+        run(["git", "add", SCHEDULE_PATH])
+        run(["git", "commit", "-m", f"update schedule {date.today()}"])
 
-    if GITHUB_REPO and GITHUB_PAT:
-        repo_with_pat = re.sub(r"^https://", f"https://{GITHUB_PAT}@", GITHUB_REPO)
-        run(["git", "push", repo_with_pat, "HEAD:main"])
-    else:
-        run(["git", "push"])
+        # Pull перед push чтобы избежать конфликтов
+        try:
+            run(["git", "pull", "--rebase"])
+        except subprocess.CalledProcessError:
+            print("Warning: git pull failed, trying to push anyway...")
+
+        if GITHUB_REPO and GITHUB_PAT:
+            repo_with_pat = re.sub(r"^https://", f"https://{GITHUB_PAT}@", GITHUB_REPO)
+            run(["git", "push", repo_with_pat, "HEAD:main"])
+        else:
+            run(["git", "push"])
+        
+        print("✅ Successfully pushed changes to repository")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Git operation failed: {e}")
+        raise
 
 
 # ====== schedule helpers ======
@@ -101,30 +113,81 @@ def fetch_with_retry(url: str, retries: int = 3):
 
 
 # ====== Telegram HTML parsing ======
-WRAP_RE = re.compile(r'<div class="tgme_widget_message_wrap".*?</div>\s*</div>\s*</div>', re.S)
-
 def extract_messages(page_html: str):
-    wraps = WRAP_RE.findall(page_html)
+    """
+    Улучшенный парсер с поддержкой разных вариантов HTML структуры Telegram
+    """
     msgs = []
-    for w in wraps:
-        m_ts = re.search(r'data-unixtime="(\d+)"', w)
+    
+    # Пробуем найти все div с классом tgme_widget_message
+    # Используем более гибкий паттерн
+    message_divs = re.findall(
+        r'<div[^>]*class="[^"]*tgme_widget_message[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+        page_html,
+        re.S
+    )
+    
+    # Если не нашли, пробуем альтернативный паттерн
+    if not message_divs:
+        message_divs = re.findall(
+            r'<div[^>]*data-post="[^"]+?"[^>]*>(.*?)</section>',
+            page_html,
+            re.S
+        )
+    
+    # Если всё ещё ничего не нашли, пробуем искать по data-post напрямую
+    if not message_divs:
+        # Ищем блоки с data-post
+        post_blocks = re.finditer(
+            r'data-post="([^"]+)"[^>]*>.*?data-unixtime="(\d+)".*?<div[^>]*class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>',
+            page_html,
+            re.S
+        )
+        
+        for match in post_blocks:
+            post_id = match.group(1)
+            ts = int(match.group(2))
+            text_html = match.group(3)
+            
+            # Очистка HTML
+            text_html = text_html.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+            text_plain = re.sub(r"<.*?>", "", text_html)
+            text_plain = html.unescape(text_plain).strip()
+            
+            if text_plain:
+                msgs.append({"ts": ts, "post": post_id, "text": text_plain})
+        
+        if msgs:
+            msgs.sort(key=lambda x: x["ts"])
+            return msgs
+    
+    # Обработка найденных блоков (старый метод)
+    for block in message_divs:
+        # Извлекаем timestamp
+        m_ts = re.search(r'data-unixtime="(\d+)"', block)
         ts = int(m_ts.group(1)) if m_ts else 0
-
-        m_post = re.search(r'data-post="([^"]+)"', w)
+        
+        # Извлекаем post ID
+        m_post = re.search(r'data-post="([^"]+)"', block)
         post_id = m_post.group(1) if m_post else ""
-
-        m_text = re.search(r'<div class="tgme_widget_message_text[^"]*">(.*?)</div>', w, re.S)
+        
+        # Извлекаем текст сообщения
+        m_text = re.search(r'<div[^>]*class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', block, re.S)
+        if not m_text:
+            # Пробуем альтернативный паттерн
+            m_text = re.search(r'class="js-message_text[^"]*"[^>]*>(.*?)</div>', block, re.S)
+        
         if not m_text:
             continue
-
+        
         text_html = m_text.group(1)
         text_html = text_html.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
         text_plain = re.sub(r"<.*?>", "", text_html)
         text_plain = html.unescape(text_plain).strip()
-
+        
         if text_plain:
             msgs.append({"ts": ts, "post": post_id, "text": text_plain})
-
+    
     msgs.sort(key=lambda x: x["ts"])
     return msgs
 
@@ -312,7 +375,9 @@ def main():
         return
 
     save_schedule(groups, date_str)
-    git_push_if_changed()
+    
+    # Git push теперь делает workflow, не скрипт
+    # git_push_if_changed()
 
     print(f"\n✅ Updated from channel={CHANNEL}, post={best.get('post')}, ts={best.get('ts')}, date={date_str}")
 
