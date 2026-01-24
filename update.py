@@ -1,42 +1,4 @@
-def extract_date_from_text(text: str) -> str | None:
-    """Извлекает дату из текста поста"""
-    t = text.lower()
-
-    # 1) dd.mm.yyyy / dd-mm-yyyy / dd/mm/yyyy
-    m = re.search(r'(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})', t)
-    if m:
-        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        try:
-            return date(y, mo, d).isoformat()
-        except Exception:
-            pass
-
-    # 2) dd.mm (год текущий)
-    m = re.search(r'(\d{1,2})[.\-/](\d{1,2})(?!\d)', t)
-    if m:
-        d, mo = int(m.group(1)), int(m.group(2))
-        if 1 <= d <= 31 and 1 <= mo <= 12:
-            y = date.today().year
-            try:
-                return date(y, mo, d).isoformat()
-            except Exception:
-                pass
-
-    # 3) "24 січня 2026" / "24 января 2026"
-    m = re.search(r'\b(\d{1,2})\s+([а-яіїє]+)\s+(\d{4})\b', t)
-    if m:
-        d = int(m.group(1))
-        mon_name = m.group(2)
-        y = int(m.group(3))
-        mo = MONTHS_UA_RU.get(mon_name)
-        if mo and 1 <= d <= 31:
-            try:
-                return date(y, mo, d).isoformat()
-            except Exception:
-                pass
-
-    # 4) "24 січня" (год текущий) - используем \b для границы слова
-    m = re.search(r'\b(\d{1,2}import os
+import os
 import re
 import json
 import html
@@ -67,39 +29,6 @@ GIT_NAME = os.getenv("GIT_NAME", "Auto Updater")
 GIT_EMAIL = os.getenv("GIT_EMAIL", "auto@local")
 
 
-# ====== git helpers ======
-def run(cmd: list[str]):
-    subprocess.check_call(cmd)
-
-def git_push_if_changed():
-    try:
-        status = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
-        if not status:
-            print("No changes to commit.")
-            return
-
-        run(["git", "config", "user.name", GIT_NAME])
-        run(["git", "config", "user.email", GIT_EMAIL])
-        run(["git", "add", SCHEDULE_PATH])
-        run(["git", "commit", "-m", f"update schedule {date.today()}"])
-
-        try:
-            run(["git", "pull", "--rebase"])
-        except subprocess.CalledProcessError:
-            print("Warning: git pull failed, trying to push anyway...")
-
-        if GITHUB_REPO and GITHUB_PAT:
-            repo_with_pat = re.sub(r"^https://", f"https://{GITHUB_PAT}@", GITHUB_REPO)
-            run(["git", "push", repo_with_pat, "HEAD:main"])
-        else:
-            run(["git", "push"])
-        
-        print("✅ Successfully pushed changes to repository")
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Git operation failed: {e}")
-        raise
-
-
 # ====== schedule helpers ======
 def load_existing():
     if not os.path.exists(SCHEDULE_PATH):
@@ -115,8 +44,6 @@ def save_schedule(groups: dict, date_str: str):
 
 # ====== Улучшенный fetch с обходом кэша ======
 def fetch_with_retry(url: str, retries: int = 3):
-    """Пытаемся обойти кэш через разные User-Agent и timestamp"""
-    
     user_agents = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -149,10 +76,8 @@ def fetch_with_retry(url: str, retries: int = 3):
 
 # ====== Telegram HTML parsing ======
 def extract_messages(page_html: str):
-    """Улучшенный парсер с поддержкой разных вариантов HTML структуры Telegram"""
     msgs = []
     
-    # Ищем блоки с data-post
     post_blocks = re.finditer(
         r'data-post="([^"]+)".*?<div[^>]*class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>',
         page_html,
@@ -163,14 +88,12 @@ def extract_messages(page_html: str):
         post_id = match.group(1)
         text_html = match.group(2)
         
-        # Ищем timestamp в окрестностях (ищем в 1000 символах до match)
         start_pos = max(0, match.start() - 1000)
         context = page_html[start_pos:match.end()]
         
         m_ts = re.search(r'data-unixtime="(\d+)"', context)
         ts = int(m_ts.group(1)) if m_ts else 0
         
-        # Очистка HTML
         text_html = text_html.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
         text_plain = re.sub(r"<.*?>", "", text_html)
         text_plain = html.unescape(text_plain).strip()
@@ -183,34 +106,22 @@ def extract_messages(page_html: str):
 
 
 def has_group_lines(text: str) -> bool:
-    """Проверяет наличие строк с группами отключений"""
-    # Паттерны: "1.1 03:00" или "1.1 - 08:00"
     return bool(re.search(r'(^|\n)\s*\d+\.\d+\s+\d{2}:\d{2}', text, re.MULTILINE))
 
 
 def has_keywords(text: str) -> bool:
-    """Проверяет наличие ключевых слов"""
     low = text.lower()
     return any(k in low for k in KEYWORDS)
 
 
 def parse_groups(text: str) -> dict:
-    """
-    Парсит графики отключений из текста.
-    Поддерживает форматы:
-    - 1.1 03:00 - 10:00 / 13:30 - 20:30
-    - 1.1 - 08:00-12:00, 16:00-20:00
-    - 1.1: 08:00-12:00; 16:00-20:00
-    """
     groups = {}
     norm = text.replace("–", "-").replace("—", "-").replace("−", "-")
 
     for line in norm.splitlines():
         line = line.strip()
-        # Убираем эмодзи и маркеры
         line = re.sub(r'^[•🔴❌\-\s]+', '', line)
         
-        # Паттерн: "1.1 03:00 - 10:00 / 13:30 - 20:30"
         m = re.match(r'^(\d+\.\d+)\s+(.+)$', line)
         if not m:
             continue
@@ -218,15 +129,12 @@ def parse_groups(text: str) -> dict:
         group_id = m.group(1)
         rest = m.group(2).strip()
         
-        # Разделяем интервалы по / или ;
         parts = [p.strip() for p in re.split(r'[/;]', rest) if p.strip()]
         
         intervals = []
         for part in parts:
-            # Ищем все времена в формате HH:MM
             times = re.findall(r'\d{2}:\d{2}', part)
             
-            # Создаём интервалы из пар времён
             for i in range(0, len(times) - 1, 2):
                 interval = f"{times[i]}-{times[i+1]}"
                 intervals.append(interval)
@@ -257,56 +165,75 @@ MONTHS_UA_RU = {
 }
 
 def extract_date_from_text(text: str) -> str | None:
-    """Извлекает дату из текста поста"""
     t = text.lower()
+    today = date.today()
 
-    # 1) dd.mm.yyyy / dd-mm-yyyy / dd/mm/yyyy
-    m = re.search(r'(^|\D)(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})(\D|$)', t)
+    # ПРИОРИТЕТ 1: dd.mm.yyyy
+    m = re.search(r'\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\b', t)
     if m:
-        d, mo, y = int(m.group(2)), int(m.group(3)), int(m.group(4))
-        try:
-            return date(y, mo, d).isoformat()
-        except Exception:
-            pass
-
-    # 2) dd.mm (год текущий)
-    m = re.search(r'(^|\D)(\d{1,2})[.\-/](\d{1,2})(\D|$)', t)
-    if m:
-        d, mo = int(m.group(2)), int(m.group(3))
-        y = date.today().year
-        try:
-            return date(y, mo, d).isoformat()
-        except Exception:
-            pass
-
-    # 3) "24 січня 2026" / "24 января 2026"
-    m = re.search(r'(^|\D)(\d{1,2})\s+([а-яіїє]+)\s+(\d{4})(\D|$)', t)
-    if m:
-        d = int(m.group(2))
-        mon_name = m.group(3)
-        y = int(m.group(4))
-        mo = MONTHS_UA_RU.get(mon_name)
-        if mo:
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= d <= 31 and 1 <= mo <= 12 and 2020 <= y <= 2030:
             try:
                 return date(y, mo, d).isoformat()
             except Exception:
                 pass
 
-    # 4) "24 січня" (год текущий)
-    m = re.search(r'(^|\D)(\d{1,2})\s+([а-яіїє]+)(\D|$)', t)
+    # ПРИОРИТЕТ 2: "24 січня 2026"
+    m = re.search(r'\b(\d{1,2})\s+([а-яіїє]+)\s+(\d{4})\b', t)
     if m:
-        d = int(m.group(2))
-        mon_name = m.group(3)
+        d = int(m.group(1))
+        mon_name = m.group(2)
+        y = int(m.group(3))
         mo = MONTHS_UA_RU.get(mon_name)
-        if mo:
-            today = date.today()
+        if mo and 1 <= d <= 31 and 2020 <= y <= 2030:
+            try:
+                return date(y, mo, d).isoformat()
+            except Exception:
+                pass
+
+    # ПРИОРИТЕТ 3: "на 24 січня"
+    m = re.search(r'\bна\s+(\d{1,2})\s+([а-яіїє]+)\b', t)
+    if m:
+        d = int(m.group(1))
+        mon_name = m.group(2)
+        mo = MONTHS_UA_RU.get(mon_name)
+        if mo and 1 <= d <= 31:
             y = today.year
-            
-            # Если дата в прошлом (например, нашли "24 января" а сейчас конец января)
-            # и разница больше 20 дней - значит это следующий год
             try:
                 parsed_date = date(y, mo, d)
-                if parsed_date < today and (today - parsed_date).days > 20:
+                if parsed_date < today and (today - parsed_date).days > 7:
+                    y += 1
+                    parsed_date = date(y, mo, d)
+                return parsed_date.isoformat()
+            except Exception:
+                pass
+
+    # ПРИОРИТЕТ 4: dd.mm
+    m = re.search(r'\b(\d{1,2})[.\-/](\d{1,2})\b(?![.\-/\d])', t)
+    if m:
+        d, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= d <= 31 and 1 <= mo <= 12:
+            y = today.year
+            try:
+                parsed_date = date(y, mo, d)
+                if parsed_date < today and (today - parsed_date).days > 7:
+                    y += 1
+                    parsed_date = date(y, mo, d)
+                return parsed_date.isoformat()
+            except Exception:
+                pass
+
+    # ПРИОРИТЕТ 5: "24 січня"
+    m = re.search(r'\b(\d{1,2})\s+([а-яіїє]+)\b', t)
+    if m:
+        d = int(m.group(1))
+        mon_name = m.group(2)
+        mo = MONTHS_UA_RU.get(mon_name)
+        if mo and 1 <= d <= 31:
+            y = today.year
+            try:
+                parsed_date = date(y, mo, d)
+                if parsed_date < today and (today - parsed_date).days > 7:
                     y += 1
                     parsed_date = date(y, mo, d)
                 return parsed_date.isoformat()
@@ -352,7 +279,6 @@ def main():
         print(f"Latest message post ID: {latest_msg.get('post')}")
         print(f"Latest message preview: {latest_msg['text'][:150]}...")
 
-    # Собираем кандидатов
     today = date.today()
     tomorrow = today + timedelta(days=1)
     candidates = []
@@ -363,7 +289,6 @@ def main():
         if not has_group_lines(m["text"]):
             continue
         
-        # Извлекаем дату с логированием
         post_date = extract_date_from_text(m["text"])
         post_preview = m["text"][:100].replace('\n', ' ')
         
