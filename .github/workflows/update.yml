@@ -2,24 +2,23 @@ name: Update Schedule
 
 on:
   schedule:
-    # Запускать каждый час в 5 минут (например: 00:05, 01:05, 02:05 и т.д.)
     - cron: '5 * * * *'
-  
-  workflow_dispatch:  # Возможность ручного запуска через GitHub UI
-  
+  workflow_dispatch:
   push:
     branches:
-      - main  # Запускать при пуше в main (опционально)
+      - main
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Явно даём права на запись
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,13 +37,17 @@ jobs:
           TIMEZONE: Europe/Kyiv
           TG_LOOKBACK: "200"
           UPDATE_IF_DATE_CHANGED: "1"
-          GITHUB_REPO: ${{ github.server_url }}/${{ github.repository }}
-          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-          GIT_NAME: GitHub Actions Bot
-          GIT_EMAIL: github-actions[bot]@users.noreply.github.com
-        run: python update.py
+        run: python update.py || true  # Продолжить даже если скрипт упал
       
-      - name: Upload schedule.json as artifact (for debugging)
+      - name: Commit and push if changed
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add schedule.json
+          git diff --staged --quiet || git commit -m "Update schedule $(date -u +%Y-%m-%d)"
+          git push || echo "Nothing to push"
+      
+      - name: Upload schedule.json as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
