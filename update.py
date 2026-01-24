@@ -195,17 +195,23 @@ def extract_date_from_text(text: str) -> str | None:
     t = text.lower()
     today = date.today()
 
-    # 1. dd.mm.yyyy
+    # ПРИОРИТЕТ 0: "сьогодні" / "сегодня" / "today"
+    if any(word in t for word in ['сьогодні', 'сегодня', 'today']):
+        # Проверяем что это не просто упоминание, а про график
+        if any(word in t for word in ['графік', 'график', 'schedule', 'станом', 'змінено', 'изменён']):
+            return today.isoformat()
+
+    # ПРИОРИТЕТ 1: dd.mm.yyyy
     m = re.search(r'\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\b', t)
     if m:
         d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if 1 <= d <= 31 and 1 <= mo <= 12 and 2020 <= y <= 2030:
             try:
                 return date(y, mo, d).isoformat()
-            except:
+            except Exception:
                 pass
 
-    # 2. "24 січня 2026"
+    # ПРИОРИТЕТ 2: "24 січня 2026"
     m = re.search(r'\b(\d{1,2})\s+([а-яіїє]+)\s+(\d{4})\b', t)
     if m:
         d = int(m.group(1))
@@ -215,10 +221,10 @@ def extract_date_from_text(text: str) -> str | None:
         if mo and 1 <= d <= 31 and 2020 <= y <= 2030:
             try:
                 return date(y, mo, d).isoformat()
-            except:
+            except Exception:
                 pass
 
-    # 3. "на 24 січня"
+    # ПРИОРИТЕТ 3: "на 24 січня"
     m = re.search(r'\bна\s+(\d{1,2})\s+([а-яіїє]+)\b', t)
     if m:
         d = int(m.group(1))
@@ -235,7 +241,7 @@ def extract_date_from_text(text: str) -> str | None:
             except:
                 pass
 
-    # 4. dd.mm
+    # ПРИОРИТЕТ 4: dd.mm
     m = re.search(r'\b(\d{1,2})[.\-/](\d{1,2})\b(?![.\-/\d])', t)
     if m:
         d, mo = int(m.group(1)), int(m.group(2))
@@ -250,7 +256,7 @@ def extract_date_from_text(text: str) -> str | None:
             except:
                 pass
 
-    # 5. "24 січня"
+    # ПРИОРИТЕТ 5: "24 січня"
     m = re.search(r'\b(\d{1,2})\s+([а-яіїє]+)\b', t)
     if m:
         d = int(m.group(1))
