@@ -3,7 +3,9 @@ import re
 import json
 import html
 import subprocess
+import time
 from datetime import datetime, date, timezone, timedelta
+from random import randint
 import requests
 
 # ====== НАСТРОЙКИ ======
@@ -17,7 +19,7 @@ KEYWORDS = [k.strip().lower() for k in os.getenv(
     "онов,оновив,оновились,график,графіки,графік,дтек,yasno,відключення,відключення світла,черга,група"
 ).split(",") if k.strip()]
 
-LOOKBACK = int(os.getenv("TG_LOOKBACK", "80"))
+LOOKBACK = int(os.getenv("TG_LOOKBACK", "200"))  # Увеличено с 80 до 200
 
 # Если хочешь коммитить даже при тех же группах, но новая дата — 1
 UPDATE_IF_DATE_CHANGED = os.getenv("UPDATE_IF_DATE_CHANGED", "0") == "1"
@@ -61,6 +63,41 @@ def save_schedule(groups: dict, date_str: str):
     data = {"date": date_str, "timezone": TIMEZONE_NAME, "groups": groups}
     with open(SCHEDULE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ====== Улучшенный fetch с обходом кэша ======
+def fetch_with_retry(url: str, retries: int = 3):
+    """Пытаемся обойти кэш через разные User-Agent и timestamp"""
+    
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ]
+    
+    for i in range(retries):
+        try:
+            # Добавляем timestamp чтобы обойти кэш
+            cache_buster = f"?_={int(time.time() * 1000)}"
+            headers = {
+                'User-Agent': user_agents[i % len(user_agents)],
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7'
+            }
+            
+            print(f"Fetching {url} (attempt {i+1}/{retries})...")
+            r = requests.get(url + cache_buster, headers=headers, timeout=20)
+            r.raise_for_status()
+            print(f"Successfully fetched page ({len(r.text)} bytes)")
+            return r.text
+        except Exception as e:
+            print(f"Attempt {i+1} failed: {e}")
+            if i == retries - 1:
+                raise
+            time.sleep(randint(2, 5))
 
 
 # ====== Telegram HTML parsing ======
@@ -217,17 +254,22 @@ def date_from_message_ts(ts: int) -> str:
 
 
 def main():
-    r = requests.get(
-        TG_URL,
-        timeout=20,
-        headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
-    )
-    r.raise_for_status()
-    page = r.text
+    # Используем улучшенный fetch
+    page = fetch_with_retry(TG_URL)
 
     msgs = extract_messages(page)
     if not msgs:
         raise RuntimeError("No messages parsed from t.me/s page (maybe blocked or HTML changed)")
+
+    # Логирование для диагностики
+    print(f"Total messages parsed: {len(msgs)}")
+    print(f"Checking last {LOOKBACK} messages...")
+    if msgs:
+        latest_msg = msgs[-1]
+        latest_dt = datetime.fromtimestamp(latest_msg['ts'], tz=timezone.utc)
+        print(f"Latest message timestamp: {latest_dt} UTC")
+        print(f"Latest message post ID: {latest_msg.get('post')}")
+        print(f"Latest message preview: {latest_msg['text'][:150]}...")
 
     # 1) ключевые слова + группы
     best = None
@@ -247,12 +289,19 @@ def main():
     if best is None:
         raise RuntimeError("No suitable post found in last LOOKBACK messages")
 
+    print(f"\nSelected post ID: {best.get('post')}")
+    print(f"Post timestamp: {datetime.fromtimestamp(best.get('ts', 0), tz=timezone.utc)}")
+    print(f"Post preview:\n{best['text'][:300]}...\n")
+
     groups = parse_groups(best["text"])
+    print(f"Parsed {len(groups)} groups: {list(groups.keys())}")
 
     # ДАТА: 1) из текста поста, 2) из времени поста, 3) текущая
     date_str = extract_date_from_text(best["text"])
     if not date_str:
         date_str = date_from_message_ts(best.get("ts", 0))
+    
+    print(f"Extracted date: {date_str}")
 
     existing = load_existing()
     old_groups = existing.get("groups", {})
@@ -265,7 +314,7 @@ def main():
     save_schedule(groups, date_str)
     git_push_if_changed()
 
-    print(f"Updated from channel={CHANNEL}, post={best.get('post')}, ts={best.get('ts')}, date={date_str}")
+    print(f"\n✅ Updated from channel={CHANNEL}, post={best.get('post')}, ts={best.get('ts')}, date={date_str}")
 
 if __name__ == "__main__":
     main()
