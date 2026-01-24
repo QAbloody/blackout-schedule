@@ -1,4 +1,16 @@
-import os
+# ====== НАСТРОЙКИ ======
+CHANNEL = os.getenv("TG_CHANNEL", "dnepr_svet_voda").strip()
+TG_URL = f"https://t.me/s/{CHANNEL}"
+SCHEDULE_PATH = os.getenv("SCHEDULE_PATH", "schedule.json")
+TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Kyiv")
+
+# Telegram уведомления
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
+
+KEYWORDS = [k.strip().lower() for k in os.getenv(
+    "TG_KEYWORDS",
+    "онов,оновimport os
 import re
 import json
 import html
@@ -13,6 +25,10 @@ CHANNEL = os.getenv("TG_CHANNEL", "dnepr_svet_voda").strip()
 TG_URL = f"https://t.me/s/{CHANNEL}"
 SCHEDULE_PATH = os.getenv("SCHEDULE_PATH", "schedule.json")
 TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Kyiv")
+
+# Telegram уведомления
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 
 KEYWORDS = [k.strip().lower() for k in os.getenv(
     "TG_KEYWORDS",
@@ -37,9 +53,37 @@ def load_existing():
         return json.load(f)
 
 def save_schedule(groups: dict, date_str: str):
-    data = {"date": date_str, "timezone": TIMEZONE_NAME, "groups": groups}
+    # Конвертируем дату из YYYY-MM-DD в DD.MM.YYYY
+    try:
+        date_obj = date.fromisoformat(date_str)
+        formatted_date = date_obj.strftime("%d.%m.%Y")
+    except:
+        formatted_date = date_str
+    
+    data = {"date": formatted_date, "timezone": TIMEZONE_NAME, "groups": groups}
     with open(SCHEDULE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ====== Telegram notifications ======
+def send_telegram_notification(message: str):
+    """Отправляет уведомление в Telegram"""
+    if not TG_BOT_TOKEN or not TG_CHAT_ID:
+        print("⚠️  Telegram notifications not configured (TG_BOT_TOKEN or TG_CHAT_ID missing)")
+        return
+    
+    try:
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TG_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        print("✅ Telegram notification sent successfully")
+    except Exception as e:
+        print(f"❌ Failed to send Telegram notification: {e}")
 
 
 # ====== Улучшенный fetch с обходом кэша ======
@@ -376,14 +420,37 @@ def main():
         print(f"📝 Groups changed: {len(old_groups)} -> {len(groups)}")
     
     if date_changed:
-        print(f"📅 Date changed: {old_date} -> {date_str}")
+        print(f"📅 Date changed: {old_date} -> {formatted_date}")
 
     save_schedule(groups, date_str)
+
+    # Отправляем уведомление в Telegram
+    if groups_changed or date_changed:
+        # Конвертируем дату для сообщения
+        try:
+            date_obj = date.fromisoformat(date_str)
+            formatted_date = date_obj.strftime("%d.%m.%Y")
+        except:
+            formatted_date = date_str
+        
+        message = f"🔔 <b>Обновление графика ДТЭК</b>\n\n"
+        message += f"📅 Дата: <b>{formatted_date}</b>\n"
+        message += f"📊 Групп: <b>{len(groups)}</b>\n\n"
+        
+        if groups_changed:
+            message += "📝 <b>Изменились группы отключений</b>\n"
+        if date_changed:
+            message += f"📅 <b>Дата изменилась:</b> {old_date} → {formatted_date}\n"
+        
+        message += f"\n🔗 <a href='https://t.me/s/{CHANNEL}'>Источник</a>"
+        message += f"\n📂 <a href='https://github.com/{GITHUB_REPO.split('/')[-2]}/{GITHUB_REPO.split('/')[-1]}/blob/main/schedule.json'>schedule.json</a>"
+        
+        send_telegram_notification(message)
 
     print(f"\n✅ Schedule saved to {SCHEDULE_PATH}")
     print(f"Channel: {CHANNEL}")
     print(f"Post: {best.get('post')}")
-    print(f"Date: {date_str}")
+    print(f"Date: {formatted_date}")
     print(f"Groups: {len(groups)}")
 
 if __name__ == "__main__":
