@@ -66,7 +66,28 @@ def fetch_planned_outages(city: str = "dnipro") -> Dict[str, Any]:
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
     
-    return response.json()
+    data = response.json()
+    
+    # DEBUG: показуємо структуру відповіді
+    print(f"\n🔍 DEBUG: API Response structure")
+    print(f"   Keys: {list(data.keys())[:5]}...")
+    
+    # Показуємо приклад для групи 1.1
+    if "1.1" in data:
+        group_data = data["1.1"]
+        print(f"   Group 1.1 keys: {list(group_data.keys())}")
+        if "today" in group_data:
+            today_data = group_data["today"]
+            print(f"   Today keys: {list(today_data.keys())}")
+            slots = today_data.get("slots", [])
+            print(f"   Slots count: {len(slots)}")
+            if slots:
+                print(f"   First slot: {slots[0]}")
+                # Показуємо всі типи слотів
+                types = set(s.get("type") for s in slots)
+                print(f"   Slot types: {types}")
+    
+    return data
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
