@@ -3,7 +3,7 @@
 YASNO Schedule Parser - парсить графік відключень через офіційний API
 Оновлює schedule.json для Telegram бота
 
-API: https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/{region_id}/dsos/{dso_id}/planned-outages
+API: https://api.yasno.com.ua/api/v1/pages/home/schedule-turn-off-electricity
 """
 
 import os
@@ -12,20 +12,15 @@ import json
 import requests
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Any
+import re
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # КОНФІГУРАЦІЯ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# API endpoint для планованих відключень
-PLANNED_OUTAGES_API = "https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/{region_id}/dsos/{dso_id}/planned-outages"
-
-# Регіони та DSO (Distribution System Operator)
-REGIONS = {
-    "dnipro": {"region_id": 25, "dso_id": 902},
-    "kyiv": {"region_id": 7, "dso_id": 401},
-}
+# API endpoint
+DAILY_SCHEDULE_API = "https://api.yasno.com.ua/api/v1/pages/home/schedule-turn-off-electricity"
 
 # Налаштування
 CITY = os.getenv("YASNO_CITY", "dnipro")
@@ -40,80 +35,45 @@ ALL_GROUPS = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.
 # API КЛІЄНТ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def fetch_planned_outages(city: str = "dnipro") -> Dict[str, Any]:
-    """
-    Отримує заплановані відключення через API
-    
-    Returns:
-        Сирі дані API
-    """
-    region_config = REGIONS.get(city)
-    if not region_config:
-        raise ValueError(f"Unknown city: {city}. Available: {list(REGIONS.keys())}")
-    
-    url = PLANNED_OUTAGES_API.format(
-        region_id=region_config["region_id"],
-        dso_id=region_config["dso_id"]
-    )
-    
-    print(f"📡 Fetching: {url}")
+def fetch_schedule_api() -> Dict[str, Any]:
+    """Отримує дані з API"""
+    print(f"📡 Fetching: {DAILY_SCHEDULE_API}")
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json",
     }
     
-    response = requests.get(url, headers=headers, timeout=30)
+    response = requests.get(DAILY_SCHEDULE_API, headers=headers, timeout=30)
     response.raise_for_status()
     
-    data = response.json()
-    
-    # DEBUG: показуємо структуру відповіді
-    print(f"\n🔍 DEBUG: API Response structure")
-    print(f"   Keys: {list(data.keys())[:5]}...")
-    
-    # Показуємо приклад для групи 1.1
-    if "1.1" in data:
-        group_data = data["1.1"]
-        print(f"   Group 1.1 keys: {list(group_data.keys())}")
-        if "today" in group_data:
-            today_data = group_data["today"]
-            print(f"   Today keys: {list(today_data.keys())}")
-            slots = today_data.get("slots", [])
-            print(f"   Slots count: {len(slots)}")
-            if slots:
-                print(f"   First slot: {slots[0]}")
-                # Показуємо всі типи слотів
-                types = set(s.get("type") for s in slots)
-                print(f"   Slot types: {types}")
-    
-    return data
+    return response.json()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ПАРСЕР
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def minutes_to_time(minutes: int) -> str:
-    """Конвертує хвилини від початку доби в HH:MM"""
-    hours = minutes // 60
-    mins = minutes % 60
+def hours_to_time(hours: float) -> str:
+    """Конвертує години (може бути 12.5 = 12:30) в HH:MM"""
+    h = int(hours)
+    m = int((hours - h) * 60)
     
-    if hours >= 24:
+    if h >= 24:
         return "24:00"
     
-    return f"{hours:02d}:{mins:02d}"
+    return f"{h:02d}:{m:02d}"
 
 
-def merge_slots(slots: List[Dict]) -> List[Dict]:
-    """Об'єднує послідовні слоти"""
-    if not slots:
+def merge_intervals(intervals: List[Dict]) -> List[Dict]:
+    """Об'єднує послідовні інтервали"""
+    if not intervals:
         return []
     
-    sorted_slots = sorted(slots, key=lambda x: x["start"])
-    merged = [{"start": sorted_slots[0]["start"], "end": sorted_slots[0]["end"]}]
+    sorted_intervals = sorted(intervals, key=lambda x: x["start"])
+    merged = [{"start": sorted_intervals[0]["start"], "end": sorted_intervals[0]["end"]}]
     
-    for current in sorted_slots[1:]:
+    for current in sorted_intervals[1:]:
         previous = merged[-1]
         
         if current["start"] <= previous["end"]:
@@ -124,86 +84,120 @@ def merge_slots(slots: List[Dict]) -> List[Dict]:
     return merged
 
 
-def parse_slots_to_intervals(slots: List[Dict]) -> List[str]:
+def parse_group_slots(slots: List[Dict]) -> List[str]:
     """
-    Конвертує слоти API в інтервали HH:MM-HH:MM
+    Парсить слоти групи в інтервали HH:MM-HH:MM
     
-    API повертає:
-    {"start": 840, "end": 1080, "type": "Definite"}
+    Слоти приходять як:
+    {"start": 0, "end": 4, "type": "DEFINITE_OUTAGE"}
     
-    start/end - хвилини від початку доби (840 = 14:00)
+    start/end - години (можуть бути десятковими: 12.5 = 12:30)
     """
-    # Фільтруємо тільки "Definite" (реальні відключення)
-    outage_slots = [s for s in slots if s.get("type") == "Definite"]
+    # Фільтруємо тільки реальні відключення
+    outage_slots = [s for s in slots if s.get("type") == "DEFINITE_OUTAGE"]
     
     if not outage_slots:
         return []
     
-    # Об'єднуємо послідовні інтервали
-    merged = merge_slots(outage_slots)
+    # Об'єднуємо послідовні
+    merged = merge_intervals(outage_slots)
     
     # Конвертуємо в HH:MM формат
     intervals = []
     for slot in merged:
-        start_str = minutes_to_time(slot["start"])
-        end_str = minutes_to_time(slot["end"])
+        start_str = hours_to_time(slot["start"])
+        end_str = hours_to_time(slot["end"])
         intervals.append(f"{start_str}-{end_str}")
     
     return intervals
 
 
-def parse_api_response(data: Dict[str, Any], day: str = "today") -> Dict[str, Any]:
+def parse_api_response(data: Dict[str, Any], city: str = "dnipro", day: str = "today") -> Dict[str, Any]:
     """
-    Парсить відповідь API в формат schedule.json
+    Парсить відповідь API
     
-    API структура:
+    Структура:
     {
-        "1.1": {
-            "today": {
-                "slots": [{"start": 0, "end": 840, "type": "NotPlanned"}, ...],
-                "date": "2026-01-26T00:00:00+02:00",
-                "status": "ScheduleApplies"
-            },
-            "tomorrow": {...},
-            "updatedOn": "2026-01-26T10:00:00+00:00"
-        },
-        "1.2": {...},
-        ...
+        "components": [
+            {
+                "template_name": "electricity-outages-daily-schedule",
+                "dailySchedule": {
+                    "dnipro": {
+                        "today": {
+                            "title": "Понеділок, 27.01.2026",
+                            "groups": {
+                                "1.1": [{"start": 0, "end": 4, "type": "DEFINITE_OUTAGE"}, ...]
+                            }
+                        }
+                    }
+                }
+            }
+        ]
     }
     """
     groups = {}
     schedule_date = None
     
-    for group_id in ALL_GROUPS:
-        group_data = data.get(group_id, {})
-        day_data = group_data.get(day, {})
+    # Шукаємо компонент з графіком
+    components = data.get("components", [])
+    
+    print(f"🔍 DEBUG: Found {len(components)} components")
+    
+    daily_schedule = None
+    for comp in components:
+        template = comp.get("template_name", "")
+        print(f"   Component: {template}")
         
-        if not day_data:
-            continue
+        if template == "electricity-outages-daily-schedule":
+            daily_schedule = comp.get("dailySchedule", {})
+            break
+    
+    if not daily_schedule:
+        print("❌ No dailySchedule component found!")
+        return {"date": date.today().strftime("%d.%m.%Y"), "timezone": TIMEZONE_NAME, "groups": {}}
+    
+    print(f"🔍 DEBUG: dailySchedule cities: {list(daily_schedule.keys())}")
+    
+    # Отримуємо дані для міста
+    city_data = daily_schedule.get(city, {})
+    if not city_data:
+        print(f"❌ No data for city: {city}")
+        return {"date": date.today().strftime("%d.%m.%Y"), "timezone": TIMEZONE_NAME, "groups": {}}
+    
+    print(f"🔍 DEBUG: city_data keys: {list(city_data.keys())}")
+    
+    # Отримуємо дані для дня
+    day_data = city_data.get(day, {})
+    if not day_data:
+        print(f"❌ No data for day: {day}")
+        return {"date": date.today().strftime("%d.%m.%Y"), "timezone": TIMEZONE_NAME, "groups": {}}
+    
+    # Витягуємо дату з title
+    title = day_data.get("title", "")
+    print(f"🔍 DEBUG: title = {title}")
+    
+    # Парсимо дату з "Понеділок, 27.01.2026"
+    date_match = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})', title)
+    if date_match:
+        d, m, y = date_match.groups()
+        schedule_date = f"{int(d):02d}.{int(m):02d}.{y}"
+    else:
+        schedule_date = date.today().strftime("%d.%m.%Y")
+    
+    # Парсимо групи
+    groups_data = day_data.get("groups", {})
+    print(f"🔍 DEBUG: Found {len(groups_data)} groups")
+    
+    for group_id, slots in groups_data.items():
+        print(f"   Group {group_id}: {len(slots)} slots")
+        if slots:
+            # Показуємо типи слотів
+            types = set(s.get("type") for s in slots)
+            print(f"      Types: {types}")
         
-        # Витягуємо дату (беремо з першої групи)
-        if not schedule_date and "date" in day_data:
-            # Формат: "2026-01-26T00:00:00+02:00"
-            date_str = day_data["date"]
-            try:
-                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                schedule_date = dt.strftime("%d.%m.%Y")
-            except (ValueError, AttributeError):
-                pass
-        
-        # Парсимо слоти
-        slots = day_data.get("slots", [])
-        intervals = parse_slots_to_intervals(slots)
-        
+        intervals = parse_group_slots(slots)
         if intervals:
             groups[group_id] = intervals
-    
-    # Якщо дату не знайшли - використовуємо поточну
-    if not schedule_date:
-        target_date = date.today()
-        if day == "tomorrow":
-            target_date += timedelta(days=1)
-        schedule_date = target_date.strftime("%d.%m.%Y")
     
     return {
         "date": schedule_date,
@@ -254,7 +248,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="YASNO Schedule Parser")
-    parser.add_argument("--city", default=CITY, choices=list(REGIONS.keys()),
+    parser.add_argument("--city", default=CITY, choices=["dnipro", "kiev"],
                        help="City (default: dnipro)")
     parser.add_argument("--day", default="today", choices=["today", "tomorrow"],
                        help="Day to fetch (default: today)")
@@ -274,10 +268,10 @@ def main():
     
     try:
         # 1. Отримуємо дані з API
-        raw_data = fetch_planned_outages(args.city)
+        raw_data = fetch_schedule_api()
         
-        # 2. Парсимо у формат schedule.json
-        schedule = parse_api_response(raw_data, args.day)
+        # 2. Парсимо
+        schedule = parse_api_response(raw_data, args.city, args.day)
         
         # 3. Виводимо результат
         print(f"\n📊 Schedule for {schedule['date']}")
@@ -301,22 +295,7 @@ def main():
             return 0
         
         if has_changes:
-            old_date = existing.get("date", "N/A")
-            new_date = schedule["date"]
             print(f"\n📝 Changes detected!")
-            if old_date != new_date:
-                print(f"   Date: {old_date} → {new_date}")
-            
-            # Показуємо зміни по групах
-            old_groups = existing.get("groups", {})
-            new_groups = schedule["groups"]
-            
-            for group_id in ALL_GROUPS:
-                old_intervals = old_groups.get(group_id, [])
-                new_intervals = new_groups.get(group_id, [])
-                
-                if old_intervals != new_intervals:
-                    print(f"   {group_id}: {old_intervals} → {new_intervals}")
         
         # 5. Зберігаємо
         save_schedule(schedule, args.output)
@@ -329,6 +308,8 @@ def main():
         return 1
     except Exception as e:
         print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
