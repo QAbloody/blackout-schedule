@@ -80,8 +80,8 @@ def merge_intervals(intervals: List[Dict]) -> List[Dict]:
 
 def parse_group_slots(slots: List[Dict]) -> List[str]:
     """Парсить слоти групи в інтервали HH:MM-HH:MM"""
-    # Фільтруємо тільки реальні відключення
-    outage_slots = [s for s in slots if s.get("type") == "DEFINITE_OUTAGE"]
+    # Беремо всі слоти що мають start/end (будь-який тип)
+    outage_slots = [s for s in slots if isinstance(s, dict) and "start" in s and "end" in s]
     
     if not outage_slots:
         return []
