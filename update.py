@@ -149,7 +149,23 @@ def parse_api_response(data: Dict[str, Any], city: str = "dnipro", day: str = "t
         print(f"   Component: {template}")
         
         if template == "electricity-outages-daily-schedule":
+            # DEBUG: показуємо всі ключі компонента
+            print(f"   🔍 Component keys: {list(comp.keys())}")
+            
             daily_schedule = comp.get("dailySchedule", {})
+            
+            # Може бути під іншим ключем
+            if not daily_schedule:
+                print(f"   🔍 Looking for schedule data...")
+                for key in comp.keys():
+                    val = comp[key]
+                    if isinstance(val, dict) and ("dnipro" in val or "kiev" in val or "kyiv" in val):
+                        print(f"   🔍 Found city data in key: {key}")
+                        daily_schedule = val
+                        break
+                    if isinstance(val, dict) and "today" in val:
+                        print(f"   🔍 Found 'today' in key: {key}")
+                        print(f"   🔍 Value: {list(val.keys())}")
             break
     
     if not daily_schedule:
