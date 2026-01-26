@@ -1,20 +1,11 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# YASNO Schedule - GitHub Actions Workflow
-# Автоматично перевіряє API YASNO і оновлює schedule.json
-# ═══════════════════════════════════════════════════════════════════════════════
-
 name: Update Schedule
 
 on:
   schedule:
-    # Кожні 30 хвилин
     - cron: '5,35 * * * *'
-  
   workflow_dispatch:
-  
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - 'update.py'
       - '.github/workflows/update.yml'
@@ -28,7 +19,7 @@ jobs:
       contents: write
     
     steps:
-      - name: 📥 Checkout repository
+      - name: 📥 Checkout
         uses: actions/checkout@v4
       
       - name: 🐍 Set up Python
@@ -36,13 +27,28 @@ jobs:
         with:
           python-version: '3.11'
       
+      - name: 🌐 Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+      
       - name: 📦 Install dependencies
-        run: pip install requests
+        run: pip install selenium
       
       - name: 🔍 Run update script
         run: python update.py
       
-      - name: 💾 Commit and push changes
+      - name: 📤 Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ github.run_number }}
+          path: |
+            debug_page.html
+          retention-days: 3
+          if-no-files-found: ignore
+      
+      - name: 💾 Commit and push
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -50,9 +56,9 @@ jobs:
           git add schedule.json
           
           if git diff --staged --quiet; then
-            echo "✅ No changes to commit"
+            echo "✅ No changes"
           else
             git commit -m "🔄 Update schedule $(date -u +%Y-%m-%d\ %H:%M\ UTC)"
             git push
-            echo "✅ Changes pushed successfully"
+            echo "✅ Pushed"
           fi
