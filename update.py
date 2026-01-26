@@ -152,15 +152,23 @@ def parse_api_response(data: Dict[str, Any], city: str = "dnipro") -> Dict[str, 
         if group_id not in ALL_GROUPS:
             continue
         
-        print(f"   {group_id}: {len(slots)} slots", end="")
+        # Flatten якщо slots це список списків
+        flat_slots = []
+        for item in slots:
+            if isinstance(item, list):
+                flat_slots.extend(item)
+            elif isinstance(item, dict):
+                flat_slots.append(item)
         
-        if slots:
-            types = set(s.get("type") for s in slots)
+        print(f"   {group_id}: {len(flat_slots)} slots", end="")
+        
+        if flat_slots:
+            types = set(s.get("type") for s in flat_slots if isinstance(s, dict))
             print(f" | types: {types}")
         else:
             print()
         
-        intervals = parse_group_slots(slots)
+        intervals = parse_group_slots(flat_slots)
         if intervals:
             groups[group_id] = intervals
     
