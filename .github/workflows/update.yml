@@ -53,12 +53,14 @@ jobs:
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+          # Спочатку pull
+          git pull --rebase origin main || true
+          
           git add schedule.json
           
           if git diff --staged --quiet; then
             echo "✅ No changes"
           else
-            git pull --rebase origin main
             git commit -m "🔄 Update schedule $(date -u +%Y-%m-%d\ %H:%M\ UTC)"
             git push
             echo "✅ Pushed"
