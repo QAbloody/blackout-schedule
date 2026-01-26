@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
 """
-YASNO Schedule Parser - парсить графік відключень через офіційний API
-Оновлює schedule.json для Telegram бота
-
-API: https://api.yasno.com.ua/api/v1/pages/home/schedule-turn-off-electricity
+YASNO Schedule Parser - парсить графік з static.yasno.ua через Selenium
 """
 
 import os
 import sys
 import json
-import requests
+import re
 from datetime import datetime, date
 from typing import Dict, List, Any
-import re
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # КОНФІГУРАЦІЯ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-DAILY_SCHEDULE_API = "https://api.yasno.com.ua/api/v1/pages/home/schedule-turn-off-electricity"
-
-CITY = os.getenv("YASNO_CITY", "dnipro")
+YASNO_URL = "https://static.yasno.ua/dnipro/outages"
 SCHEDULE_PATH = os.getenv("SCHEDULE_PATH", "schedule.json")
 TIMEZONE_NAME = "Europe/Kyiv"
 
@@ -29,151 +30,209 @@ ALL_GROUPS = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# API КЛІЄНТ
+# SELENIUM
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def fetch_schedule_api() -> Dict[str, Any]:
-    """Отримує дані з API"""
-    print(f"📡 Fetching: {DAILY_SCHEDULE_API}")
+def setup_driver():
+    """Налаштовує headless Chrome"""
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-    }
-    
-    response = requests.get(DAILY_SCHEDULE_API, headers=headers, timeout=30)
-    response.raise_for_status()
-    
-    return response.json()
+    driver = webdriver.Chrome(options=options)
+    return driver
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ПАРСЕР
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def hours_to_time(hours: float) -> str:
-    """Конвертує години в HH:MM"""
-    h = int(hours)
-    m = int((hours - h) * 60)
-    if h >= 24:
-        return "24:00"
-    return f"{h:02d}:{m:02d}"
-
-
-def merge_intervals(intervals: List[Dict]) -> List[Dict]:
-    """Об'єднує послідовні інтервали"""
-    if not intervals:
+def hours_to_interval(hours: List[int]) -> List[str]:
+    """Конвертує список годин в інтервали"""
+    if not hours:
         return []
     
-    sorted_intervals = sorted(intervals, key=lambda x: x["start"])
-    merged = [{"start": sorted_intervals[0]["start"], "end": sorted_intervals[0]["end"]}]
-    
-    for current in sorted_intervals[1:]:
-        previous = merged[-1]
-        if current["start"] <= previous["end"]:
-            previous["end"] = max(previous["end"], current["end"])
-        else:
-            merged.append({"start": current["start"], "end": current["end"]})
-    
-    return merged
-
-
-def parse_group_slots(slots: List[Dict]) -> List[str]:
-    """Парсить слоти групи в інтервали HH:MM-HH:MM"""
-    # Беремо всі слоти що мають start/end (будь-який тип)
-    outage_slots = [s for s in slots if isinstance(s, dict) and "start" in s and "end" in s]
-    
-    if not outage_slots:
-        return []
-    
-    merged = merge_intervals(outage_slots)
-    
+    hours = sorted(set(hours))
     intervals = []
-    for slot in merged:
-        start_str = hours_to_time(slot["start"])
-        end_str = hours_to_time(slot["end"])
-        intervals.append(f"{start_str}-{end_str}")
+    
+    start = hours[0]
+    prev = hours[0]
+    
+    for h in hours[1:]:
+        if h - prev > 1:
+            end = prev + 1
+            intervals.append(f"{start:02d}:00-{end:02d}:00" if end < 24 else f"{start:02d}:00-24:00")
+            start = h
+        prev = h
+    
+    # Останній інтервал
+    end = prev + 1
+    intervals.append(f"{start:02d}:00-{end:02d}:00" if end < 24 else f"{start:02d}:00-24:00")
     
     return intervals
 
 
-def parse_api_response(data: Dict[str, Any], city: str = "dnipro") -> Dict[str, Any]:
-    """
-    Парсить відповідь API
+def parse_schedule(driver) -> Dict[str, Any]:
+    """Парсить графік зі сторінки"""
+    print(f"📡 Loading: {YASNO_URL}")
+    driver.get(YASNO_URL)
     
-    Структура:
-    {
-        "components": [
-            {
-                "template_name": "electricity-outages-daily-schedule",
-                "schedule": {
-                    "dnipro": {
-                        "group_1.1": [{"start": 0, "end": 4, "type": "DEFINITE_OUTAGE"}, ...],
-                        "group_1.2": [...],
-                        ...
+    # Чекаємо завантаження
+    wait = WebDriverWait(driver, 20)
+    wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+    
+    import time
+    time.sleep(3)  # Даємо JS відпрацювати
+    
+    groups = {}
+    schedule_date = date.today().strftime("%d.%m.%Y")
+    
+    # Шукаємо дату на сторінці
+    try:
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+        
+        # Шукаємо "Сьогодні, 26 січня" або подібне
+        months_ua = {
+            'січня': 1, 'лютого': 2, 'березня': 3, 'квітня': 4,
+            'травня': 5, 'червня': 6, 'липня': 7, 'серпня': 8,
+            'вересня': 9, 'жовтня': 10, 'листопада': 11, 'грудня': 12,
+        }
+        
+        for month_name, month_num in months_ua.items():
+            match = re.search(rf'(\d{{1,2}})\s+{month_name}', page_text.lower())
+            if match:
+                day = int(match.group(1))
+                year = datetime.now().year
+                schedule_date = f"{day:02d}.{month_num:02d}.{year}"
+                print(f"📅 Found date: {schedule_date}")
+                break
+    except Exception as e:
+        print(f"⚠️  Could not extract date: {e}")
+    
+    # Парсимо таблицю
+    # Шукаємо всі рядки з групами (1.1, 1.2, тощо)
+    try:
+        # Знаходимо всі елементи на сторінці
+        all_elements = driver.find_elements(By.XPATH, "//*")
+        
+        print(f"🔍 Scanning page for schedule data...")
+        
+        # Шукаємо елементи що містять номери груп
+        for group_id in ALL_GROUPS:
+            try:
+                # Шукаємо елемент з текстом групи
+                group_elements = driver.find_elements(By.XPATH, f"//*[contains(text(), '{group_id}')]")
+                
+                for group_el in group_elements:
+                    # Знаходимо батьківський рядок
+                    try:
+                        parent = group_el.find_element(By.XPATH, "./..")
+                        row_text = parent.text
+                        
+                        # Якщо рядок містить тільки номер групи - шукаємо вище
+                        if len(row_text.strip()) < 10:
+                            parent = parent.find_element(By.XPATH, "./..")
+                            row_text = parent.text
+                        
+                        # Шукаємо всі дочірні елементи (клітинки)
+                        cells = parent.find_elements(By.XPATH, ".//*")
+                        
+                        outage_hours = []
+                        
+                        for i, cell in enumerate(cells):
+                            # Перевіряємо чи є іконка відключення (svg або специфічний клас)
+                            try:
+                                cell_html = cell.get_attribute("outerHTML")
+                                cell_class = cell.get_attribute("class") or ""
+                                
+                                # Шукаємо ознаки відключення
+                                has_outage = (
+                                    "svg" in cell_html.lower() or
+                                    "outage" in cell_class.lower() or
+                                    "off" in cell_class.lower() or
+                                    "×" in cell.text or
+                                    "✕" in cell.text
+                                )
+                                
+                                if has_outage and i < 24:
+                                    outage_hours.append(i)
+                            except:
+                                pass
+                        
+                        if outage_hours:
+                            intervals = hours_to_interval(outage_hours)
+                            if intervals:
+                                groups[group_id] = intervals
+                                print(f"   {group_id}: {intervals}")
+                                break
+                    except:
+                        pass
+            except:
+                pass
+        
+        # Альтернативний метод - парсимо через JavaScript
+        if not groups:
+            print("🔍 Trying JavaScript extraction...")
+            
+            js_result = driver.execute_script("""
+                const result = {};
+                const groups = ['1.1', '1.2', '2.1', '2.2', '3.1', '3.2', '4.1', '4.2', '5.1', '5.2', '6.1', '6.2'];
+                
+                // Шукаємо таблицю або grid
+                const tables = document.querySelectorAll('table, [class*="grid"], [class*="schedule"]');
+                
+                for (const table of tables) {
+                    const rows = table.querySelectorAll('tr, [class*="row"]');
+                    
+                    for (const row of rows) {
+                        const text = row.textContent;
+                        
+                        for (const group of groups) {
+                            if (text.includes(group) && !result[group]) {
+                                const cells = row.querySelectorAll('td, [class*="cell"]');
+                                const hours = [];
+                                
+                                cells.forEach((cell, i) => {
+                                    // Перевіряємо наявність SVG або певних класів
+                                    if (cell.querySelector('svg') || 
+                                        cell.classList.toString().includes('outage') ||
+                                        cell.classList.toString().includes('off')) {
+                                        if (i > 0 && i <= 24) hours.push(i - 1);
+                                    }
+                                });
+                                
+                                if (hours.length > 0) {
+                                    result[group] = hours;
+                                }
+                            }
+                        }
                     }
                 }
-            }
-        ]
-    }
-    """
-    groups = {}
-    
-    # Шукаємо компонент з графіком
-    components = data.get("components", [])
-    
-    schedule_data = None
-    for comp in components:
-        if comp.get("template_name") == "electricity-outages-daily-schedule":
-            # Дані в ключі "schedule"
-            schedule_data = comp.get("schedule", {})
-            break
-    
-    if not schedule_data:
-        print("❌ No schedule component found!")
-        return {"date": date.today().strftime("%d.%m.%Y"), "timezone": TIMEZONE_NAME, "groups": {}}
-    
-    # Отримуємо дані для міста
-    city_data = schedule_data.get(city, {})
-    if not city_data:
-        print(f"❌ No data for city: {city}")
-        return {"date": date.today().strftime("%d.%m.%Y"), "timezone": TIMEZONE_NAME, "groups": {}}
-    
-    print(f"🔍 Found {len(city_data)} groups for {city}")
-    
-    # Парсимо групи (ключі типу "group_1.1" -> "1.1")
-    for key, slots in city_data.items():
-        # Витягуємо номер групи з "group_1.1" -> "1.1"
-        if key.startswith("group_"):
-            group_id = key.replace("group_", "")
-        else:
-            group_id = key
+                
+                return result;
+            """)
+            
+            if js_result:
+                for group_id, hours in js_result.items():
+                    intervals = hours_to_interval(hours)
+                    if intervals:
+                        groups[group_id] = intervals
+                        print(f"   {group_id}: {intervals}")
         
-        if group_id not in ALL_GROUPS:
-            continue
+    except Exception as e:
+        print(f"❌ Parse error: {e}")
         
-        # Flatten якщо slots це список списків
-        flat_slots = []
-        for item in slots:
-            if isinstance(item, list):
-                flat_slots.extend(item)
-            elif isinstance(item, dict):
-                flat_slots.append(item)
-        
-        print(f"   {group_id}: {len(flat_slots)} slots", end="")
-        
-        if flat_slots:
-            types = set(s.get("type") for s in flat_slots if isinstance(s, dict))
-            print(f" | types: {types}")
-        else:
-            print()
-        
-        intervals = parse_group_slots(flat_slots)
-        if intervals:
-            groups[group_id] = intervals
-    
-    # Дата - сьогодні
-    schedule_date = date.today().strftime("%d.%m.%Y")
+        # Зберігаємо HTML для дебагу
+        try:
+            with open("debug_page.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
+            print("📄 Saved debug_page.html")
+        except:
+            pass
     
     return {
         "date": schedule_date,
@@ -183,29 +242,26 @@ def parse_api_response(data: Dict[str, Any], city: str = "dnipro") -> Dict[str, 
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# РОБОТА З ФАЙЛАМИ
+# ФАЙЛИ
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def load_existing(path: str) -> Dict:
-    """Завантажує існуючий графік"""
     if not os.path.exists(path):
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except:
         return {}
 
 
 def save_schedule(schedule: Dict, path: str) -> None:
-    """Зберігає графік в JSON"""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(schedule, f, ensure_ascii=False, indent=2)
     print(f"💾 Saved to {path}")
 
 
 def schedules_differ(old: Dict, new: Dict) -> bool:
-    """Перевіряє чи є зміни"""
     return (
         old.get("groups", {}) != new.get("groups", {}) or
         old.get("date") != new.get("date")
@@ -219,43 +275,38 @@ def schedules_differ(old: Dict, new: Dict) -> bool:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="YASNO Schedule Parser")
-    parser.add_argument("--city", default=CITY, choices=["dnipro", "kiev"])
+    parser = argparse.ArgumentParser()
     parser.add_argument("--output", "-o", default=SCHEDULE_PATH)
     parser.add_argument("--force", "-f", action="store_true")
     parser.add_argument("--dry-run", "-n", action="store_true")
-    
     args = parser.parse_args()
     
-    print(f"🚀 YASNO Schedule Parser")
-    print(f"   City: {args.city}")
+    print("🚀 YASNO Schedule Parser (Selenium)")
     print()
     
+    driver = None
     try:
-        raw_data = fetch_schedule_api()
-        schedule = parse_api_response(raw_data, args.city)
+        driver = setup_driver()
+        schedule = parse_schedule(driver)
         
         print(f"\n📊 Schedule for {schedule['date']}")
-        print(f"   Groups with outages: {len(schedule['groups'])}")
-        print()
+        print(f"   Groups: {len(schedule['groups'])}")
         
-        for group_id in sorted(schedule['groups'].keys()):
-            intervals = schedule['groups'][group_id]
-            print(f"  {group_id}: {intervals}")
+        if not schedule['groups']:
+            print("\n⚠️  No schedule data parsed!")
+            return 1
         
         if args.dry_run:
-            print("\n🔍 Dry run - not saving")
+            print("\n🔍 Dry run")
             return 0
         
         existing = load_existing(args.output)
-        has_changes = schedules_differ(existing, schedule)
-        
-        if not has_changes and not args.force:
-            print("\n✅ No changes detected")
+        if not schedules_differ(existing, schedule) and not args.force:
+            print("\n✅ No changes")
             return 0
         
         save_schedule(schedule, args.output)
-        print("\n✅ Update completed!")
+        print("\n✅ Done!")
         return 0
         
     except Exception as e:
@@ -263,6 +314,9 @@ def main():
         import traceback
         traceback.print_exc()
         return 1
+    finally:
+        if driver:
+            driver.quit()
 
 
 if __name__ == "__main__":
