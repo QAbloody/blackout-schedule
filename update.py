@@ -50,6 +50,34 @@ def setup_driver():
 # ПАРСЕР
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def minutes_to_intervals(minutes: List[int]) -> List[str]:
+    """Конвертує список хвилин в інтервали HH:MM-HH:MM"""
+    if not minutes:
+        return []
+    
+    minutes = sorted(set(minutes))
+    intervals = []
+    
+    start = minutes[0]
+    prev = minutes[0]
+    
+    for m in minutes[1:]:
+        # Якщо розрив більше 30 хвилин - новий інтервал
+        if m - prev > 30:
+            end = prev + 30
+            intervals.append(f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}")
+            start = m
+        prev = m
+    
+    # Останній інтервал
+    end = prev + 30
+    if end > 24 * 60:
+        end = 24 * 60
+    intervals.append(f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}")
+    
+    return intervals
+
+
 def hours_to_intervals(hours: List[int]) -> List[str]:
     """Конвертує список годин в інтервали HH:00-HH:00"""
     if not hours:
@@ -134,7 +162,7 @@ def parse_schedule(driver) -> Dict[str, Any]:
             # Знаходимо всі клітинки в рядку
             cells = row.find_elements(By.CSS_SELECTOR, "[class*='_cell_']")
             
-            outage_hours = []
+            outage_minutes = []
             hour = 0
             
             for cell in cells:
@@ -145,17 +173,41 @@ def parse_schedule(driver) -> Dict[str, Any]:
                 
                 # Перевіряємо чи є клас _definite_ (реальне відключення)
                 cell_html = cell.get_attribute("innerHTML")
-                has_outage = "_definite_" in cell_html
                 
-                if has_outage:
-                    outage_hours.append(hour)
+                if "_definite_" in cell_html:
+                    # Перевіряємо width і left для визначення половинок
+                    # width: 100% = повна година
+                    # width: 50% + left: 0% = перші 30 хв
+                    # width: 50% + left: 50% = другі 30 хв
+                    
+                    has_first_half = False
+                    has_second_half = False
+                    
+                    # Шукаємо всі iconContainer з _definite_
+                    if "width: 100%" in cell_html or "width:100%" in cell_html:
+                        # Повна година
+                        has_first_half = True
+                        has_second_half = True
+                    else:
+                        # Перевіряємо половинки
+                        # left: 0% = перша половина
+                        # left: 50% = друга половина
+                        if "left: 0%" in cell_html or "left:0%" in cell_html:
+                            has_first_half = True
+                        if "left: 50%" in cell_html or "left:50%" in cell_html:
+                            has_second_half = True
+                    
+                    if has_first_half:
+                        outage_minutes.append(hour * 60)  # XX:00
+                    if has_second_half:
+                        outage_minutes.append(hour * 60 + 30)  # XX:30
                 
                 hour += 1
                 if hour >= 24:
                     break
             
-            if outage_hours:
-                intervals = hours_to_intervals(outage_hours)
+            if outage_minutes:
+                intervals = minutes_to_intervals(outage_minutes)
                 groups[group_id] = intervals
                 print(f"   {group_id}: {intervals}")
             else:
