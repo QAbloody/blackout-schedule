@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 YASNO Schedule Parser - парсить графік з static.yasno.ua
-Структура: CSS Grid з класами _row_, _cell_, _iconContainer_ (відключення)
+Підтримує today і tomorrow
 """
 
 import os
@@ -9,7 +9,7 @@ import sys
 import json
 import re
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Any
 
 from selenium import webdriver
@@ -19,20 +19,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# КОНФІГУРАЦІЯ
-# ═══════════════════════════════════════════════════════════════════════════════
-
 YASNO_URL = "https://static.yasno.ua/dnipro/outages"
 SCHEDULE_PATH = os.getenv("SCHEDULE_PATH", "schedule.json")
 TIMEZONE_NAME = "Europe/Kyiv"
 
 ALL_GROUPS = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.2", "6.1", "6.2"]
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SELENIUM
-# ═══════════════════════════════════════════════════════════════════════════════
 
 def setup_driver():
     options = Options()
@@ -42,112 +34,39 @@ def setup_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    
     return webdriver.Chrome(options=options)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ПАРСЕР
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def minutes_to_intervals(minutes: List[int]) -> List[str]:
-    """Конвертує список хвилин в інтервали HH:MM-HH:MM"""
     if not minutes:
         return []
     
     minutes = sorted(set(minutes))
     intervals = []
-    
     start = minutes[0]
     prev = minutes[0]
     
     for m in minutes[1:]:
-        # Якщо розрив більше 30 хвилин - новий інтервал
         if m - prev > 30:
             end = prev + 30
             intervals.append(f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}")
             start = m
         prev = m
     
-    # Останній інтервал
     end = prev + 30
     if end > 24 * 60:
         end = 24 * 60
     intervals.append(f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}")
-    
     return intervals
 
 
-def hours_to_intervals(hours: List[int]) -> List[str]:
-    """Конвертує список годин в інтервали HH:00-HH:00"""
-    if not hours:
-        return []
-    
-    hours = sorted(set(hours))
-    intervals = []
-    
-    start = hours[0]
-    prev = hours[0]
-    
-    for h in hours[1:]:
-        if h - prev > 1:
-            end = prev + 1
-            intervals.append(f"{start:02d}:00-{end:02d}:00" if end < 24 else f"{start:02d}:00-24:00")
-            start = h
-        prev = h
-    
-    end = prev + 1
-    intervals.append(f"{start:02d}:00-{end:02d}:00" if end < 24 else f"{start:02d}:00-24:00")
-    
-    return intervals
-
-
-def parse_schedule(driver) -> Dict[str, Any]:
-    """Парсить графік зі сторінки YASNO"""
-    print(f"📡 Loading: {YASNO_URL}")
-    driver.get(YASNO_URL)
-    
-    # Чекаємо завантаження React
-    wait = WebDriverWait(driver, 20)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_']")))
-    time.sleep(2)
-    
+def parse_table(driver) -> Dict[str, List[str]]:
+    """Парсить поточну таблицю на сторінці"""
     groups = {}
-    schedule_date = date.today().strftime("%d.%m.%Y")
-    
-    # Витягуємо дату з кнопки "Сьогодні, 27 січня"
-    try:
-        page_text = driver.find_element(By.TAG_NAME, "body").text
-        months = {
-            'січня': 1, 'лютого': 2, 'березня': 3, 'квітня': 4,
-            'травня': 5, 'червня': 6, 'липня': 7, 'серпня': 8,
-            'вересня': 9, 'жовтня': 10, 'листопада': 11, 'грудня': 12,
-        }
-        
-        # Шукаємо "Сьогодні, XX місяця" або "сьогодні, XX місяця"
-        for month_name, month_num in months.items():
-            match = re.search(rf'[Сс]ьогодні[,\s]+(\d{{1,2}})\s+{month_name}', page_text)
-            if match:
-                day = int(match.group(1))
-                year = datetime.now().year
-                schedule_date = f"{day:02d}.{month_num:02d}.{year}"
-                print(f"📅 Date: {schedule_date}")
-                break
-        else:
-            # Якщо не знайшли "Сьогодні" - беремо поточну дату
-            schedule_date = date.today().strftime("%d.%m.%Y")
-            print(f"📅 Date (today): {schedule_date}")
-    except Exception as e:
-        print(f"⚠️  Date extraction failed: {e}")
-        schedule_date = date.today().strftime("%d.%m.%Y")
-    
-    # Знаходимо всі рядки таблиці
     rows = driver.find_elements(By.CSS_SELECTOR, "[class*='_row_']")
-    print(f"🔍 Found {len(rows)} rows")
     
     for row in rows:
         try:
-            # Шукаємо номер групи в рядку
             row_text = row.text.strip()
             
             group_id = None
@@ -159,48 +78,29 @@ def parse_schedule(driver) -> Dict[str, Any]:
             if not group_id:
                 continue
             
-            # Знаходимо всі клітинки в рядку
             cells = row.find_elements(By.CSS_SELECTOR, "[class*='_cell_']")
-            
             outage_minutes = []
             hour = 0
             
             for cell in cells:
-                # Пропускаємо клітинку з номером групи (перша)
                 cell_text = cell.text.strip()
                 if cell_text in ALL_GROUPS:
                     continue
                 
-                # Перевіряємо чи є клас _definite_ (реальне відключення)
                 cell_html = cell.get_attribute("innerHTML")
                 
                 if "_definite_" in cell_html:
                     has_first_half = False
                     has_second_half = False
                     
-                    # Рахуємо кількість блоків з _definite_
-                    # Кожен блок - це або повна година, або половина
-                    
-                    # Шукаємо width:50% або width: 50%
                     has_half_width = bool(re.search(r'width:\s*50%', cell_html))
                     
                     if has_half_width:
-                        # Є половинки - перевіряємо left
-                        if re.search(r'_definite_[^>]*left:\s*0%', cell_html) or \
-                           re.search(r'left:\s*0%[^>]*_definite_', cell_html):
+                        if "left: 0%" in cell_html or "left:0%" in cell_html:
                             has_first_half = True
-                        if re.search(r'_definite_[^>]*left:\s*50%', cell_html) or \
-                           re.search(r'left:\s*50%[^>]*_definite_', cell_html):
+                        if "left: 50%" in cell_html or "left:50%" in cell_html:
                             has_second_half = True
-                        
-                        # Якщо нічого не знайшли - шукаємо простіше
-                        if not has_first_half and not has_second_half:
-                            if "left: 0%" in cell_html or "left:0%" in cell_html:
-                                has_first_half = True
-                            if "left: 50%" in cell_html or "left:50%" in cell_html:
-                                has_second_half = True
                     else:
-                        # Немає width:50% - значить повна година
                         has_first_half = True
                         has_second_half = True
                     
@@ -214,34 +114,58 @@ def parse_schedule(driver) -> Dict[str, Any]:
                     break
             
             if outage_minutes:
-                intervals = minutes_to_intervals(outage_minutes)
-                groups[group_id] = intervals
-                print(f"   {group_id}: {intervals}")
-            else:
-                print(f"   {group_id}: no outages")
-                
-        except Exception as e:
-            print(f"⚠️  Row parse error: {e}")
-    
-    # Зберігаємо HTML для дебагу якщо нічого не знайшли
-    if not groups:
-        print("⚠️  No groups parsed, saving debug HTML...")
-        try:
-            with open("debug_page.html", "w", encoding="utf-8") as f:
-                f.write(driver.page_source)
+                groups[group_id] = minutes_to_intervals(outage_minutes)
         except:
             pass
     
+    return groups
+
+
+def parse_schedule(driver) -> Dict[str, Any]:
+    """Парсить графік на сьогодні і завтра"""
+    print(f"📡 Loading: {YASNO_URL}")
+    driver.get(YASNO_URL)
+    
+    wait = WebDriverWait(driver, 20)
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_']")))
+    time.sleep(2)
+    
+    # Парсимо сьогодні
+    print("📅 Parsing today...")
+    today_groups = parse_table(driver)
+    today_date = date.today().strftime("%d.%m.%Y")
+    print(f"   Date: {today_date}, Groups: {len(today_groups)}")
+    for g in sorted(today_groups.keys()):
+        print(f"   {g}: {today_groups[g]}")
+    
+    # Клікаємо на "Завтра"
+    print("\n📅 Parsing tomorrow...")
+    tomorrow_groups = {}
+    tomorrow_date = (date.today() + timedelta(days=1)).strftime("%d.%m.%Y")
+    
+    try:
+        tomorrow_btn = driver.find_element(By.XPATH, "//*[contains(text(), 'Завтра')]")
+        tomorrow_btn.click()
+        time.sleep(2)
+        tomorrow_groups = parse_table(driver)
+        print(f"   Date: {tomorrow_date}, Groups: {len(tomorrow_groups)}")
+        for g in sorted(tomorrow_groups.keys()):
+            print(f"   {g}: {tomorrow_groups[g]}")
+    except Exception as e:
+        print(f"   ⚠️ Tomorrow not available: {e}")
+    
     return {
-        "date": schedule_date,
         "timezone": TIMEZONE_NAME,
-        "groups": groups,
+        "today": {
+            "date": today_date,
+            "groups": today_groups,
+        },
+        "tomorrow": {
+            "date": tomorrow_date,
+            "groups": tomorrow_groups,
+        },
     }
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ФАЙЛИ
-# ═══════════════════════════════════════════════════════════════════════════════
 
 def load_existing(path: str) -> Dict:
     if not os.path.exists(path):
@@ -256,42 +180,33 @@ def load_existing(path: str) -> Dict:
 def save_schedule(schedule: Dict, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(schedule, f, ensure_ascii=False, indent=2)
-    print(f"💾 Saved to {path}")
+    print(f"\n💾 Saved to {path}")
 
 
 def schedules_differ(old: Dict, new: Dict) -> bool:
     return (
-        old.get("groups", {}) != new.get("groups", {}) or
-        old.get("date") != new.get("date")
+        old.get("today") != new.get("today") or
+        old.get("tomorrow") != new.get("tomorrow")
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def main():
     import argparse
-    
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", "-o", default=SCHEDULE_PATH)
     parser.add_argument("--force", "-f", action="store_true")
     parser.add_argument("--dry-run", "-n", action="store_true")
     args = parser.parse_args()
     
-    print("🚀 YASNO Schedule Parser")
-    print()
+    print("🚀 YASNO Schedule Parser\n")
     
     driver = None
     try:
         driver = setup_driver()
         schedule = parse_schedule(driver)
         
-        print(f"\n📊 Schedule for {schedule['date']}")
-        print(f"   Groups with outages: {len(schedule['groups'])}")
-        
-        if not schedule['groups']:
-            print("\n⚠️  No data parsed!")
+        if not schedule['today']['groups']:
+            print("\n⚠️ No today data!")
             return 1
         
         if args.dry_run:
@@ -304,7 +219,7 @@ def main():
             return 0
         
         save_schedule(schedule, args.output)
-        print("\n✅ Done!")
+        print("✅ Done!")
         return 0
         
     except Exception as e:
