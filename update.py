@@ -183,19 +183,23 @@ def parse_schedule(driver) -> Dict[str, Any]:
                     has_first_half = False
                     has_second_half = False
                     
-                    # Шукаємо всі iconContainer з _definite_
-                    if "width: 100%" in cell_html or "width:100%" in cell_html:
-                        # Повна година
-                        has_first_half = True
-                        has_second_half = True
-                    else:
-                        # Перевіряємо половинки
-                        # left: 0% = перша половина
-                        # left: 50% = друга половина
+                    # Рахуємо скільки _definite_ блоків
+                    definite_count = cell_html.count("_definite_")
+                    
+                    if "width: 50%" in cell_html or "width:50%" in cell_html:
+                        # Половинки
                         if "left: 0%" in cell_html or "left:0%" in cell_html:
                             has_first_half = True
                         if "left: 50%" in cell_html or "left:50%" in cell_html:
                             has_second_half = True
+                        
+                        # Debug для перших кількох груп
+                        if group_id == "1.1" and hour < 3:
+                            print(f"      DEBUG {hour}:00 - definite_count={definite_count}, first={has_first_half}, second={has_second_half}")
+                    else:
+                        # Повна година (немає width:50%)
+                        has_first_half = True
+                        has_second_half = True
                     
                     if has_first_half:
                         outage_minutes.append(hour * 60)  # XX:00
