@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-YASNO Schedule Parser - парсить графік з static.yasno.ua через Selenium
+YASNO Schedule Parser - парсить графік з static.yasno.ua
+Структура: CSS Grid з класами _row_, _cell_, _iconContainer_ (відключення)
 """
 
 import os
 import sys
 import json
 import re
+import time
 from datetime import datetime, date
 from typing import Dict, List, Any
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -34,7 +35,6 @@ ALL_GROUPS = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def setup_driver():
-    """Налаштовує headless Chrome"""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -43,16 +43,15 @@ def setup_driver():
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     
-    driver = webdriver.Chrome(options=options)
-    return driver
+    return webdriver.Chrome(options=options)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ПАРСЕР
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def hours_to_interval(hours: List[int]) -> List[str]:
-    """Конвертує список годин в інтервали"""
+def hours_to_intervals(hours: List[int]) -> List[str]:
+    """Конвертує список годин в інтервали HH:00-HH:00"""
     if not hours:
         return []
     
@@ -69,7 +68,6 @@ def hours_to_interval(hours: List[int]) -> List[str]:
             start = h
         prev = h
     
-    # Останній інтервал
     end = prev + 1
     intervals.append(f"{start:02d}:00-{end:02d}:00" if end < 24 else f"{start:02d}:00-24:00")
     
@@ -77,160 +75,93 @@ def hours_to_interval(hours: List[int]) -> List[str]:
 
 
 def parse_schedule(driver) -> Dict[str, Any]:
-    """Парсить графік зі сторінки"""
+    """Парсить графік зі сторінки YASNO"""
     print(f"📡 Loading: {YASNO_URL}")
     driver.get(YASNO_URL)
     
-    # Чекаємо завантаження
+    # Чекаємо завантаження React
     wait = WebDriverWait(driver, 20)
-    wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-    
-    import time
-    time.sleep(3)  # Даємо JS відпрацювати
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_']")))
+    time.sleep(2)
     
     groups = {}
     schedule_date = date.today().strftime("%d.%m.%Y")
     
-    # Шукаємо дату на сторінці
+    # Витягуємо дату
     try:
         page_text = driver.find_element(By.TAG_NAME, "body").text
-        
-        # Шукаємо "Сьогодні, 26 січня" або подібне
-        months_ua = {
+        months = {
             'січня': 1, 'лютого': 2, 'березня': 3, 'квітня': 4,
             'травня': 5, 'червня': 6, 'липня': 7, 'серпня': 8,
             'вересня': 9, 'жовтня': 10, 'листопада': 11, 'грудня': 12,
         }
-        
-        for month_name, month_num in months_ua.items():
+        for month_name, month_num in months.items():
             match = re.search(rf'(\d{{1,2}})\s+{month_name}', page_text.lower())
             if match:
                 day = int(match.group(1))
                 year = datetime.now().year
                 schedule_date = f"{day:02d}.{month_num:02d}.{year}"
-                print(f"📅 Found date: {schedule_date}")
+                print(f"📅 Date: {schedule_date}")
                 break
     except Exception as e:
-        print(f"⚠️  Could not extract date: {e}")
+        print(f"⚠️  Date extraction failed: {e}")
     
-    # Парсимо таблицю
-    # Шукаємо всі рядки з групами (1.1, 1.2, тощо)
-    try:
-        # Знаходимо всі елементи на сторінці
-        all_elements = driver.find_elements(By.XPATH, "//*")
-        
-        print(f"🔍 Scanning page for schedule data...")
-        
-        # Шукаємо елементи що містять номери груп
-        for group_id in ALL_GROUPS:
-            try:
-                # Шукаємо елемент з текстом групи
-                group_elements = driver.find_elements(By.XPATH, f"//*[contains(text(), '{group_id}')]")
-                
-                for group_el in group_elements:
-                    # Знаходимо батьківський рядок
-                    try:
-                        parent = group_el.find_element(By.XPATH, "./..")
-                        row_text = parent.text
-                        
-                        # Якщо рядок містить тільки номер групи - шукаємо вище
-                        if len(row_text.strip()) < 10:
-                            parent = parent.find_element(By.XPATH, "./..")
-                            row_text = parent.text
-                        
-                        # Шукаємо всі дочірні елементи (клітинки)
-                        cells = parent.find_elements(By.XPATH, ".//*")
-                        
-                        outage_hours = []
-                        
-                        for i, cell in enumerate(cells):
-                            # Перевіряємо чи є іконка відключення (svg або специфічний клас)
-                            try:
-                                cell_html = cell.get_attribute("outerHTML")
-                                cell_class = cell.get_attribute("class") or ""
-                                
-                                # Шукаємо ознаки відключення
-                                has_outage = (
-                                    "svg" in cell_html.lower() or
-                                    "outage" in cell_class.lower() or
-                                    "off" in cell_class.lower() or
-                                    "×" in cell.text or
-                                    "✕" in cell.text
-                                )
-                                
-                                if has_outage and i < 24:
-                                    outage_hours.append(i)
-                            except:
-                                pass
-                        
-                        if outage_hours:
-                            intervals = hours_to_interval(outage_hours)
-                            if intervals:
-                                groups[group_id] = intervals
-                                print(f"   {group_id}: {intervals}")
-                                break
-                    except:
-                        pass
-            except:
-                pass
-        
-        # Альтернативний метод - парсимо через JavaScript
-        if not groups:
-            print("🔍 Trying JavaScript extraction...")
+    # Знаходимо всі рядки таблиці
+    rows = driver.find_elements(By.CSS_SELECTOR, "[class*='_row_']")
+    print(f"🔍 Found {len(rows)} rows")
+    
+    for row in rows:
+        try:
+            # Шукаємо номер групи в рядку
+            row_text = row.text.strip()
             
-            js_result = driver.execute_script("""
-                const result = {};
-                const groups = ['1.1', '1.2', '2.1', '2.2', '3.1', '3.2', '4.1', '4.2', '5.1', '5.2', '6.1', '6.2'];
-                
-                // Шукаємо таблицю або grid
-                const tables = document.querySelectorAll('table, [class*="grid"], [class*="schedule"]');
-                
-                for (const table of tables) {
-                    const rows = table.querySelectorAll('tr, [class*="row"]');
-                    
-                    for (const row of rows) {
-                        const text = row.textContent;
-                        
-                        for (const group of groups) {
-                            if (text.includes(group) && !result[group]) {
-                                const cells = row.querySelectorAll('td, [class*="cell"]');
-                                const hours = [];
-                                
-                                cells.forEach((cell, i) => {
-                                    // Перевіряємо наявність SVG або певних класів
-                                    if (cell.querySelector('svg') || 
-                                        cell.classList.toString().includes('outage') ||
-                                        cell.classList.toString().includes('off')) {
-                                        if (i > 0 && i <= 24) hours.push(i - 1);
-                                    }
-                                });
-                                
-                                if (hours.length > 0) {
-                                    result[group] = hours;
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                return result;
-            """)
+            group_id = None
+            for g in ALL_GROUPS:
+                if row_text.startswith(g) or f"\n{g}\n" in f"\n{row_text}\n":
+                    group_id = g
+                    break
             
-            if js_result:
-                for group_id, hours in js_result.items():
-                    intervals = hours_to_interval(hours)
-                    if intervals:
-                        groups[group_id] = intervals
-                        print(f"   {group_id}: {intervals}")
-        
-    except Exception as e:
-        print(f"❌ Parse error: {e}")
-        
-        # Зберігаємо HTML для дебагу
+            if not group_id:
+                continue
+            
+            # Знаходимо всі клітинки в рядку
+            cells = row.find_elements(By.CSS_SELECTOR, "[class*='_cell_']")
+            
+            outage_hours = []
+            hour = 0
+            
+            for cell in cells:
+                # Пропускаємо клітинку з номером групи (перша)
+                cell_text = cell.text.strip()
+                if cell_text in ALL_GROUPS:
+                    continue
+                
+                # Перевіряємо чи є iconContainer (відключення)
+                icons = cell.find_elements(By.CSS_SELECTOR, "[class*='iconContainer'], svg")
+                
+                if icons:
+                    outage_hours.append(hour)
+                
+                hour += 1
+                if hour >= 24:
+                    break
+            
+            if outage_hours:
+                intervals = hours_to_intervals(outage_hours)
+                groups[group_id] = intervals
+                print(f"   {group_id}: {intervals}")
+            else:
+                print(f"   {group_id}: no outages")
+                
+        except Exception as e:
+            print(f"⚠️  Row parse error: {e}")
+    
+    # Зберігаємо HTML для дебагу якщо нічого не знайшли
+    if not groups:
+        print("⚠️  No groups parsed, saving debug HTML...")
         try:
             with open("debug_page.html", "w", encoding="utf-8") as f:
                 f.write(driver.page_source)
-            print("📄 Saved debug_page.html")
         except:
             pass
     
@@ -281,7 +212,7 @@ def main():
     parser.add_argument("--dry-run", "-n", action="store_true")
     args = parser.parse_args()
     
-    print("🚀 YASNO Schedule Parser (Selenium)")
+    print("🚀 YASNO Schedule Parser")
     print()
     
     driver = None
@@ -290,10 +221,10 @@ def main():
         schedule = parse_schedule(driver)
         
         print(f"\n📊 Schedule for {schedule['date']}")
-        print(f"   Groups: {len(schedule['groups'])}")
+        print(f"   Groups with outages: {len(schedule['groups'])}")
         
         if not schedule['groups']:
-            print("\n⚠️  No schedule data parsed!")
+            print("\n⚠️  No data parsed!")
             return 1
         
         if args.dry_run:
