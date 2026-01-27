@@ -93,23 +93,28 @@ def parse_table(driver) -> Dict[str, List[str]]:
                     has_first_half = False
                     has_second_half = False
                     
-                    # Debug для групи 1.1
-                    if group_id == "1.1" and hour < 6:
-                        has_50 = "50%" in cell_html
-                        has_left0 = "left: 0%" in cell_html or "left:0%" in cell_html
-                        has_left50 = "left: 50%" in cell_html or "left:50%" in cell_html
-                        print(f"      DEBUG {hour}:00 - 50%={has_50}, left0={has_left0}, left50={has_left50}")
+                    # Шукаємо всі блоки з _definite_ окремо
+                    # Патерн: знаходимо стиль кожного definite блоку
+                    definite_parts = cell_html.split("_definite_")
                     
-                    has_half_width = "50%" in cell_html
-                    
-                    if has_half_width:
-                        if "left: 0%" in cell_html or "left:0%" in cell_html:
+                    for i, part in enumerate(definite_parts[1:], 1):  # Пропускаємо перший елемент до першого _definite_
+                        # Шукаємо style в цьому блоці (до закриття div)
+                        style_end = part.find("</div>")
+                        if style_end == -1:
+                            style_end = len(part)
+                        block = part[:style_end]
+                        
+                        # Визначаємо позицію цього блоку
+                        if "width: 50%" in block or "width:50%" in block:
+                            # Половина години
+                            if "left: 0%" in block or "left:0%" in block:
+                                has_first_half = True
+                            elif "left: 50%" in block or "left:50%" in block:
+                                has_second_half = True
+                        else:
+                            # Повна година (width: 100% або не вказано)
                             has_first_half = True
-                        if "left: 50%" in cell_html or "left:50%" in cell_html:
                             has_second_half = True
-                    else:
-                        has_first_half = True
-                        has_second_half = True
                     
                     if has_first_half:
                         outage_minutes.append(hour * 60)
