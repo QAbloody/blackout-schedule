@@ -175,36 +175,39 @@ def parse_schedule(driver) -> Dict[str, Any]:
                 cell_html = cell.get_attribute("innerHTML")
                 
                 if "_definite_" in cell_html:
-                    # Перевіряємо width і left для визначення половинок
-                    # width: 100% = повна година
-                    # width: 50% + left: 0% = перші 30 хв
-                    # width: 50% + left: 50% = другі 30 хв
-                    
                     has_first_half = False
                     has_second_half = False
                     
-                    # Рахуємо скільки _definite_ блоків
-                    definite_count = cell_html.count("_definite_")
+                    # Рахуємо кількість блоків з _definite_
+                    # Кожен блок - це або повна година, або половина
                     
-                    if "width: 50%" in cell_html or "width:50%" in cell_html:
-                        # Половинки
-                        if "left: 0%" in cell_html or "left:0%" in cell_html:
+                    # Шукаємо width:50% або width: 50%
+                    has_half_width = bool(re.search(r'width:\s*50%', cell_html))
+                    
+                    if has_half_width:
+                        # Є половинки - перевіряємо left
+                        if re.search(r'_definite_[^>]*left:\s*0%', cell_html) or \
+                           re.search(r'left:\s*0%[^>]*_definite_', cell_html):
                             has_first_half = True
-                        if "left: 50%" in cell_html or "left:50%" in cell_html:
+                        if re.search(r'_definite_[^>]*left:\s*50%', cell_html) or \
+                           re.search(r'left:\s*50%[^>]*_definite_', cell_html):
                             has_second_half = True
                         
-                        # Debug для перших кількох груп
-                        if group_id == "1.1" and hour < 3:
-                            print(f"      DEBUG {hour}:00 - definite_count={definite_count}, first={has_first_half}, second={has_second_half}")
+                        # Якщо нічого не знайшли - шукаємо простіше
+                        if not has_first_half and not has_second_half:
+                            if "left: 0%" in cell_html or "left:0%" in cell_html:
+                                has_first_half = True
+                            if "left: 50%" in cell_html or "left:50%" in cell_html:
+                                has_second_half = True
                     else:
-                        # Повна година (немає width:50%)
+                        # Немає width:50% - значить повна година
                         has_first_half = True
                         has_second_half = True
                     
                     if has_first_half:
-                        outage_minutes.append(hour * 60)  # XX:00
+                        outage_minutes.append(hour * 60)
                     if has_second_half:
-                        outage_minutes.append(hour * 60 + 30)  # XX:30
+                        outage_minutes.append(hour * 60 + 30)
                 
                 hour += 1
                 if hour >= 24:
