@@ -93,7 +93,14 @@ def parse_table(driver) -> Dict[str, List[str]]:
                     has_first_half = False
                     has_second_half = False
                     
-                    has_half_width = bool(re.search(r'width:\s*50%', cell_html))
+                    # Debug для групи 1.1
+                    if group_id == "1.1" and hour < 6:
+                        has_50 = "50%" in cell_html
+                        has_left0 = "left: 0%" in cell_html or "left:0%" in cell_html
+                        has_left50 = "left: 50%" in cell_html or "left:50%" in cell_html
+                        print(f"      DEBUG {hour}:00 - 50%={has_50}, left0={has_left0}, left50={has_left50}")
+                    
+                    has_half_width = "50%" in cell_html
                     
                     if has_half_width:
                         if "left: 0%" in cell_html or "left:0%" in cell_html:
@@ -144,7 +151,12 @@ def parse_schedule(driver) -> Dict[str, Any]:
     tomorrow_date = (date.today() + timedelta(days=1)).strftime("%d.%m.%Y")
     
     try:
-        tomorrow_btn = driver.find_element(By.XPATH, "//*[contains(text(), 'Завтра')]")
+        # Шукаємо кнопку по id або по тексту
+        try:
+            tomorrow_btn = driver.find_element(By.CSS_SELECTOR, "[id*='tomorrow']")
+        except:
+            tomorrow_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Завтра')]")
+        
         tomorrow_btn.click()
         time.sleep(2)
         tomorrow_groups = parse_table(driver)
@@ -152,7 +164,7 @@ def parse_schedule(driver) -> Dict[str, Any]:
         for g in sorted(tomorrow_groups.keys()):
             print(f"   {g}: {tomorrow_groups[g]}")
     except Exception as e:
-        print(f"   ⚠️ Tomorrow not available: {e}")
+        print(f"   ⚠️ Tomorrow not available")
     
     return {
         "timezone": TIMEZONE_NAME,
