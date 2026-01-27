@@ -87,7 +87,7 @@ def parse_schedule(driver) -> Dict[str, Any]:
     groups = {}
     schedule_date = date.today().strftime("%d.%m.%Y")
     
-    # Витягуємо дату
+    # Витягуємо дату з кнопки "Сьогодні, 27 січня"
     try:
         page_text = driver.find_element(By.TAG_NAME, "body").text
         months = {
@@ -95,16 +95,23 @@ def parse_schedule(driver) -> Dict[str, Any]:
             'травня': 5, 'червня': 6, 'липня': 7, 'серпня': 8,
             'вересня': 9, 'жовтня': 10, 'листопада': 11, 'грудня': 12,
         }
+        
+        # Шукаємо "Сьогодні, XX місяця" або "сьогодні, XX місяця"
         for month_name, month_num in months.items():
-            match = re.search(rf'(\d{{1,2}})\s+{month_name}', page_text.lower())
+            match = re.search(rf'[Сс]ьогодні[,\s]+(\d{{1,2}})\s+{month_name}', page_text)
             if match:
                 day = int(match.group(1))
                 year = datetime.now().year
                 schedule_date = f"{day:02d}.{month_num:02d}.{year}"
                 print(f"📅 Date: {schedule_date}")
                 break
+        else:
+            # Якщо не знайшли "Сьогодні" - беремо поточну дату
+            schedule_date = date.today().strftime("%d.%m.%Y")
+            print(f"📅 Date (today): {schedule_date}")
     except Exception as e:
         print(f"⚠️  Date extraction failed: {e}")
+        schedule_date = date.today().strftime("%d.%m.%Y")
     
     # Знаходимо всі рядки таблиці
     rows = driver.find_elements(By.CSS_SELECTOR, "[class*='_row_']")
@@ -136,10 +143,11 @@ def parse_schedule(driver) -> Dict[str, Any]:
                 if cell_text in ALL_GROUPS:
                     continue
                 
-                # Перевіряємо чи є iconContainer (відключення)
-                icons = cell.find_elements(By.CSS_SELECTOR, "[class*='iconContainer'], svg")
+                # Перевіряємо чи є клас _definite_ (реальне відключення)
+                cell_html = cell.get_attribute("innerHTML")
+                has_outage = "_definite_" in cell_html
                 
-                if icons:
+                if has_outage:
                     outage_hours.append(hour)
                 
                 hour += 1
