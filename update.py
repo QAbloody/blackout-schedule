@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-YASNO Schedule Parser - парсить графік з static.yasno.ua
-Підтримує today і tomorrow
+Парсер графіків відключень з static.yasno.ua
+Підтримує DTEK та ЦЕК для Дніпра
 """
 
 import os
 import sys
 import json
-import re
 import time
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from typing import Dict, List, Any
 
 from selenium import webdriver
@@ -20,10 +19,12 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 YASNO_URL = "https://static.yasno.ua/dnipro/outages"
-SCHEDULE_PATH = os.getenv("SCHEDULE_PATH", "schedule.json")
-TIMEZONE_NAME = "Europe/Kyiv"
-
+TIMEZONE = "Europe/Kyiv"
 ALL_GROUPS = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.2", "6.1", "6.2"]
+
+# Файли для збереження
+DTEK_FILE = os.getenv("DTEK_FILE", "schedule.json")
+CEK_FILE = os.getenv("CEK_FILE", "schedule_cek.json")
 
 
 def setup_driver():
@@ -38,6 +39,7 @@ def setup_driver():
 
 
 def minutes_to_intervals(minutes: List[int]) -> List[str]:
+    """Конвертує список хвилин у інтервали"""
     if not minutes:
         return []
     
@@ -61,7 +63,7 @@ def minutes_to_intervals(minutes: List[int]) -> List[str]:
 
 
 def parse_table(driver) -> Dict[str, List[str]]:
-    """Парсить поточну таблицю на сторінці"""
+    """Парсить таблицю графіку"""
     groups = {}
     rows = driver.find_elements(By.CSS_SELECTOR, "[class*='_row_']")
     
@@ -69,6 +71,7 @@ def parse_table(driver) -> Dict[str, List[str]]:
         try:
             row_text = row.text.strip()
             
+            # Шукаємо групу
             group_id = None
             for g in ALL_GROUPS:
                 if row_text.startswith(g) or f"\n{g}\n" in f"\n{row_text}\n":
@@ -78,176 +81,231 @@ def parse_table(driver) -> Dict[str, List[str]]:
             if not group_id:
                 continue
             
+            # Парсимо комірки
             cells = row.find_elements(By.CSS_SELECTOR, "[class*='_cell_']")
             outage_minutes = []
-            hour = 0
             
-            for cell in cells:
-                cell_text = cell.text.strip()
-                if cell_text in ALL_GROUPS:
+            for hour, cell in enumerate(cells[:24]):
+                cell_html = cell.get_attribute("innerHTML") or ""
+                
+                if "_definite_" not in cell_html:
                     continue
                 
-                cell_html = cell.get_attribute("innerHTML")
-                
-                if "_definite_" in cell_html:
-                    has_first_half = False
-                    has_second_half = False
+                # Парсимо кожен блок _definite_ окремо
+                definite_parts = cell_html.split("_definite_")
+                for part in definite_parts[1:]:
+                    block = part[:part.find("</div>")] if "</div>" in part else part[:200]
                     
-                    # Шукаємо всі блоки з _definite_ окремо
-                    # Патерн: знаходимо стиль кожного definite блоку
-                    definite_parts = cell_html.split("_definite_")
+                    has_50_width = "width: 50%" in block or "width:50%" in block
                     
-                    for i, part in enumerate(definite_parts[1:], 1):  # Пропускаємо перший елемент до першого _definite_
-                        # Шукаємо style в цьому блоці (до закриття div)
-                        style_end = part.find("</div>")
-                        if style_end == -1:
-                            style_end = len(part)
-                        block = part[:style_end]
-                        
-                        # Визначаємо позицію цього блоку
-                        if "width: 50%" in block or "width:50%" in block:
-                            # Половина години
-                            if "left: 0%" in block or "left:0%" in block:
-                                has_first_half = True
-                            elif "left: 50%" in block or "left:50%" in block:
-                                has_second_half = True
-                        else:
-                            # Повна година (width: 100% або не вказано)
-                            has_first_half = True
-                            has_second_half = True
-                    
-                    if has_first_half:
+                    if has_50_width:
+                        if "left: 0%" in block or "left:0%" in block:
+                            outage_minutes.append(hour * 60)
+                        elif "left: 50%" in block or "left:50%" in block:
+                            outage_minutes.append(hour * 60 + 30)
+                    else:
                         outage_minutes.append(hour * 60)
-                    if has_second_half:
                         outage_minutes.append(hour * 60 + 30)
-                
-                hour += 1
-                if hour >= 24:
-                    break
             
             if outage_minutes:
                 groups[group_id] = minutes_to_intervals(outage_minutes)
-        except:
-            pass
+                
+        except Exception as e:
+            print(f"  Row error: {e}")
     
     return groups
 
 
-def parse_schedule(driver) -> Dict[str, Any]:
-    """Парсить графік на сьогодні і завтра"""
-    print(f"📡 Loading: {YASNO_URL}")
-    driver.get(YASNO_URL)
+def select_osr(driver, osr_name: str) -> bool:
+    """Вибирає ОСР (DTEK або ЦЕК) у випадаючому списку"""
+    try:
+        print(f"  Selecting OSR: {osr_name}")
+        
+        # Знаходимо dropdown ОСР
+        osr_dropdown = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "[class*='_select_'][class*='_osr_'], [class*='_dropdown_']"))
+        )
+        osr_dropdown.click()
+        time.sleep(1)
+        
+        # Шукаємо опцію
+        options = driver.find_elements(By.CSS_SELECTOR, "[class*='_option_'], [class*='_item_']")
+        for opt in options:
+            if osr_name.upper() in opt.text.upper():
+                opt.click()
+                time.sleep(2)
+                return True
+        
+        # Альтернативний метод — через текст
+        try:
+            option = driver.find_element(By.XPATH, f"//*[contains(text(), '{osr_name}')]")
+            option.click()
+            time.sleep(2)
+            return True
+        except:
+            pass
+        
+        print(f"  ⚠️ OSR '{osr_name}' not found")
+        return False
+        
+    except Exception as e:
+        print(f"  OSR selection error: {e}")
+        return False
+
+
+def click_tab(driver, tab_text: str) -> bool:
+    """Натискає вкладку 'Сьогодні' або 'Завтра'"""
+    try:
+        # Спробуємо різні селектори
+        selectors = [
+            f"[id*='{tab_text.lower()}']",
+            f"button:contains('{tab_text}')",
+            f"[class*='_option_']",
+            f"[class*='_tab_']",
+        ]
+        
+        for sel in selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in elements:
+                    if tab_text.lower() in el.text.lower():
+                        el.click()
+                        time.sleep(2)
+                        return True
+            except:
+                continue
+        
+        # XPath
+        try:
+            el = driver.find_element(By.XPATH, f"//button[contains(text(), '{tab_text}')]")
+            el.click()
+            time.sleep(2)
+            return True
+        except:
+            pass
+        
+        return False
+    except Exception as e:
+        print(f"  Tab click error: {e}")
+        return False
+
+
+def get_date_from_tab(driver, is_today: bool) -> str:
+    """Отримує дату з активної вкладки"""
+    try:
+        if is_today:
+            return datetime.now().strftime("%d.%m.%Y")
+        else:
+            from datetime import timedelta
+            return (datetime.now() + timedelta(days=1)).strftime("%d.%m.%Y")
+    except:
+        return ""
+
+
+def parse_osr(driver, osr_name: str) -> Dict[str, Any]:
+    """Парсить графіки для одного ОСР"""
+    result = {"timezone": TIMEZONE, "today": {"date": "", "groups": {}}, "tomorrow": {"date": "", "groups": {}}}
     
-    wait = WebDriverWait(driver, 20)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_']")))
+    print(f"\n📊 Parsing {osr_name}...")
+    
+    # Вибираємо ОСР
+    if osr_name != "DTEK":
+        if not select_osr(driver, osr_name):
+            print(f"  ⚠️ Could not select {osr_name}, using default")
+    
     time.sleep(2)
     
     # Парсимо сьогодні
-    print("📅 Parsing today...")
-    today_groups = parse_table(driver)
-    today_date = date.today().strftime("%d.%m.%Y")
-    print(f"   Date: {today_date}, Groups: {len(today_groups)}")
-    for g in sorted(today_groups.keys()):
-        print(f"   {g}: {today_groups[g]}")
+    print("  📅 Parsing today...")
+    result["today"]["date"] = get_date_from_tab(driver, True)
+    result["today"]["groups"] = parse_table(driver)
+    print(f"  ✅ Today: {len(result['today']['groups'])} groups")
     
-    # Клікаємо на "Завтра"
-    print("\n📅 Parsing tomorrow...")
-    tomorrow_groups = {}
-    tomorrow_date = (date.today() + timedelta(days=1)).strftime("%d.%m.%Y")
-    
-    try:
-        # Шукаємо кнопку по id або по тексту
-        try:
-            tomorrow_btn = driver.find_element(By.CSS_SELECTOR, "[id*='tomorrow']")
-        except:
-            tomorrow_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Завтра')]")
-        
-        tomorrow_btn.click()
+    # Парсимо завтра
+    print("  📅 Parsing tomorrow...")
+    if click_tab(driver, "Завтра"):
         time.sleep(2)
-        tomorrow_groups = parse_table(driver)
-        print(f"   Date: {tomorrow_date}, Groups: {len(tomorrow_groups)}")
-        for g in sorted(tomorrow_groups.keys()):
-            print(f"   {g}: {tomorrow_groups[g]}")
-    except Exception as e:
-        print(f"   ⚠️ Tomorrow not available")
+        result["tomorrow"]["date"] = get_date_from_tab(driver, False)
+        result["tomorrow"]["groups"] = parse_table(driver)
+        print(f"  ✅ Tomorrow: {len(result['tomorrow']['groups'])} groups")
+        
+        # Повертаємось на сьогодні
+        click_tab(driver, "Сьогодні")
+    else:
+        print("  ⚠️ Tomorrow tab not found")
     
-    return {
-        "timezone": TIMEZONE_NAME,
-        "today": {
-            "date": today_date,
-            "groups": today_groups,
-        },
-        "tomorrow": {
-            "date": tomorrow_date,
-            "groups": tomorrow_groups,
-        },
-    }
+    return result
 
 
-def load_existing(path: str) -> Dict:
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return {}
-
-
-def save_schedule(schedule: Dict, path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(schedule, f, ensure_ascii=False, indent=2)
-    print(f"\n💾 Saved to {path}")
-
-
-def schedules_differ(old: Dict, new: Dict) -> bool:
-    return (
-        old.get("today") != new.get("today") or
-        old.get("tomorrow") != new.get("tomorrow")
-    )
+def save_schedule(data: Dict[str, Any], filepath: str):
+    """Зберігає графік у JSON"""
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"💾 Saved: {filepath}")
 
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output", "-o", default=SCHEDULE_PATH)
-    parser.add_argument("--force", "-f", action="store_true")
-    parser.add_argument("--dry-run", "-n", action="store_true")
-    args = parser.parse_args()
-    
-    print("🚀 YASNO Schedule Parser\n")
+    print("=" * 50)
+    print("🚀 YASNO Schedule Parser (DTEK + ЦЕК)")
+    print("=" * 50)
     
     driver = None
     try:
         driver = setup_driver()
-        schedule = parse_schedule(driver)
+        print(f"\n🌐 Loading {YASNO_URL}")
+        driver.get(YASNO_URL)
         
-        if not schedule['today']['groups']:
-            print("\n⚠️ No today data!")
-            return 1
+        # Чекаємо завантаження таблиці
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_']"))
+        )
+        print("✅ Page loaded")
+        time.sleep(3)
         
-        if args.dry_run:
-            print("\n🔍 Dry run")
-            return 0
+        # Парсимо DTEK (за замовчуванням)
+        dtek_data = parse_osr(driver, "DTEK")
+        save_schedule(dtek_data, DTEK_FILE)
         
-        existing = load_existing(args.output)
-        if not schedules_differ(existing, schedule) and not args.force:
-            print("\n✅ No changes")
-            return 0
+        # Перезавантажуємо сторінку для ЦЕК
+        print("\n🔄 Reloading for CEK...")
+        driver.get(YASNO_URL)
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_']"))
+        )
+        time.sleep(3)
         
-        save_schedule(schedule, args.output)
-        print("✅ Done!")
-        return 0
+        # Парсимо ЦЕК
+        cek_data = parse_osr(driver, "ЦЕК")
+        save_schedule(cek_data, CEK_FILE)
+        
+        # Підсумок
+        print("\n" + "=" * 50)
+        print("📊 Summary:")
+        print(f"  DTEK: {sum(len(g) for g in dtek_data['today']['groups'].values())} intervals today")
+        print(f"  ЦЕК:  {sum(len(g) for g in cek_data['today']['groups'].values())} intervals today")
+        print("=" * 50)
         
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
-        return 1
+        
+        # Зберігаємо HTML для дебагу
+        if driver:
+            try:
+                with open("debug_page.html", "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
+                print("📄 Debug HTML saved to debug_page.html")
+            except:
+                pass
+        
+        sys.exit(1)
+        
     finally:
         if driver:
             driver.quit()
+            print("\n👋 Browser closed")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
