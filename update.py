@@ -123,32 +123,40 @@ def select_osr(driver, osr_name: str) -> bool:
     """Вибирає ОСР (DTEK або ЦЕК) у випадаючому списку"""
     try:
         print(f"  Selecting OSR: {osr_name}")
+        time.sleep(1)
         
-        # Знаходимо dropdown ОСР
-        osr_dropdown = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "[class*='_select_'][class*='_osr_'], [class*='_dropdown_']"))
-        )
+        # Шукаємо dropdown - button з класом y-select-field
+        try:
+            osr_dropdown = driver.find_element(By.CSS_SELECTOR, "button[class*='y-select-field'], button[class*='_wrapper_'][class*='select']")
+        except:
+            # Fallback - шукаємо по тексту ДТЕК/ЦЕК
+            buttons = driver.find_elements(By.CSS_SELECTOR, "button")
+            osr_dropdown = None
+            for btn in buttons:
+                txt = btn.text.upper()
+                if "ДТЕК" in txt or "ЦЕК" in txt or "DTEK" in txt:
+                    osr_dropdown = btn
+                    break
+        
+        if not osr_dropdown:
+            print(f"  ⚠️ OSR dropdown not found")
+            return False
+        
+        # Клікаємо щоб відкрити
         osr_dropdown.click()
         time.sleep(1)
         
-        # Шукаємо опцію
-        options = driver.find_elements(By.CSS_SELECTOR, "[class*='_option_'], [class*='_item_']")
+        # Шукаємо опцію в списку
+        options = driver.find_elements(By.CSS_SELECTOR, "[class*='option'], [role='option'], li, [class*='item']")
         for opt in options:
-            if osr_name.upper() in opt.text.upper():
+            opt_text = opt.text.upper()
+            if osr_name.upper() in opt_text or ("ЦЕК" in osr_name.upper() and "ЦЕК" in opt_text):
                 opt.click()
+                print(f"  ✅ Selected: {opt.text}")
                 time.sleep(2)
                 return True
         
-        # Альтернативний метод — через текст
-        try:
-            option = driver.find_element(By.XPATH, f"//*[contains(text(), '{osr_name}')]")
-            option.click()
-            time.sleep(2)
-            return True
-        except:
-            pass
-        
-        print(f"  ⚠️ OSR '{osr_name}' not found")
+        print(f"  ⚠️ Option '{osr_name}' not found")
         return False
         
     except Exception as e:
@@ -159,35 +167,45 @@ def select_osr(driver, osr_name: str) -> bool:
 def click_tab(driver, tab_text: str) -> bool:
     """Натискає вкладку 'Сьогодні' або 'Завтра'"""
     try:
-        # Спробуємо різні селектори
-        selectors = [
-            f"[id*='{tab_text.lower()}']",
-            f"button:contains('{tab_text}')",
-            f"[class*='_option_']",
-            f"[class*='_tab_']",
-        ]
+        time.sleep(1)
         
-        for sel in selectors:
-            try:
-                elements = driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in elements:
-                    if tab_text.lower() in el.text.lower():
-                        el.click()
-                        time.sleep(2)
-                        return True
-            except:
-                continue
+        # Шукаємо по id який містить "tomorrow" або "today"
+        tab_id = "tomorrow" if "завтра" in tab_text.lower() else "today"
         
-        # XPath
         try:
-            el = driver.find_element(By.XPATH, f"//button[contains(text(), '{tab_text}')]")
-            el.click()
-            time.sleep(2)
-            return True
+            tab = driver.find_element(By.CSS_SELECTOR, f"button[id*='{tab_id}'], [id*='{tab_id}']")
+            if tab.is_displayed():
+                tab.click()
+                print(f"  ✅ Clicked tab by id: {tab_id}")
+                time.sleep(2)
+                return True
         except:
             pass
         
+        # Fallback - шукаємо button з класом y-segmented__option
+        try:
+            tabs = driver.find_elements(By.CSS_SELECTOR, "button[class*='segmented__option'], button[class*='_option_']")
+            for tab in tabs:
+                if tab_text.lower() in tab.text.lower():
+                    tab.click()
+                    print(f"  ✅ Clicked tab: {tab.text}")
+                    time.sleep(2)
+                    return True
+        except:
+            pass
+        
+        # Шукаємо будь-який button з текстом
+        buttons = driver.find_elements(By.TAG_NAME, "button")
+        for btn in buttons:
+            if tab_text.lower() in btn.text.lower():
+                btn.click()
+                print(f"  ✅ Clicked button: {btn.text}")
+                time.sleep(2)
+                return True
+        
+        print(f"  ⚠️ Tab '{tab_text}' not found")
         return False
+        
     except Exception as e:
         print(f"  Tab click error: {e}")
         return False
