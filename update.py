@@ -125,11 +125,11 @@ def select_osr(driver, osr_name: str) -> bool:
         print(f"  Selecting OSR: {osr_name}")
         time.sleep(1)
         
-        # Шукаємо dropdown - button з класом y-select-field
+        # Шукаємо dropdown button з класом osrSelect або y-select-field
         try:
-            osr_dropdown = driver.find_element(By.CSS_SELECTOR, "button[class*='y-select-field'], button[class*='_wrapper_'][class*='select']")
+            osr_dropdown = driver.find_element(By.CSS_SELECTOR, "button[class*='osrSelect'], button[class*='y-select-field']")
         except:
-            # Fallback - шукаємо по тексту ДТЕК/ЦЕК
+            # Fallback - шукаємо button що містить ДТЕК/ЦЕК
             buttons = driver.find_elements(By.CSS_SELECTOR, "button")
             osr_dropdown = None
             for btn in buttons:
@@ -146,17 +146,17 @@ def select_osr(driver, osr_name: str) -> bool:
         osr_dropdown.click()
         time.sleep(1)
         
-        # Шукаємо опцію в списку
-        options = driver.find_elements(By.CSS_SELECTOR, "[class*='option'], [role='option'], li, [class*='item']")
+        # Шукаємо опцію - li з класом _item_
+        options = driver.find_elements(By.CSS_SELECTOR, "li[class*='_item_']")
         for opt in options:
-            opt_text = opt.text.upper()
-            if osr_name.upper() in opt_text or ("ЦЕК" in osr_name.upper() and "ЦЕК" in opt_text):
+            opt_text = opt.text.strip().upper()
+            if osr_name.upper() in opt_text:
                 opt.click()
-                print(f"  ✅ Selected: {opt.text}")
+                print(f"  ✅ Selected: {opt.text.strip()}")
                 time.sleep(2)
                 return True
         
-        print(f"  ⚠️ Option '{osr_name}' not found")
+        print(f"  ⚠️ Option '{osr_name}' not found in {len(options)} items")
         return False
         
     except Exception as e:
