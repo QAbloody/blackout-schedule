@@ -81,11 +81,14 @@ def parse_table(driver) -> Dict[str, List[str]]:
             if not group_id:
                 continue
             
-            # Парсимо комірки
+            # Парсимо комірки (перша — номер групи, пропускаємо)
             cells = row.find_elements(By.CSS_SELECTOR, "[class*='_cell_']")
             outage_minutes = []
             
-            for hour, cell in enumerate(cells[:24]):
+            # Пропускаємо першу комірку (номер групи), беремо наступні 24
+            time_cells = cells[1:25] if len(cells) > 24 else cells[1:]
+            
+            for hour, cell in enumerate(time_cells):
                 cell_html = cell.get_attribute("innerHTML") or ""
                 
                 if "_definite_" not in cell_html:
