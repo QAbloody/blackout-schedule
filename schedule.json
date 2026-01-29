@@ -1,7 +1,7 @@
 {
   "timezone": "Europe/Kyiv",
   "today": {
-    "date": "28.01.2026",
+    "date": "29.01.2026",
     "groups": {
       "1.1": [
         "01:00-06:30",
@@ -63,7 +63,7 @@
     }
   },
   "tomorrow": {
-    "date": "29.01.2026",
+    "date": "",
     "groups": {}
   }
 }
