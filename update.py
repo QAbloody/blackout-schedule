@@ -267,7 +267,7 @@ def save_schedule(data: Dict[str, Any], filepath: str):
 
 def main():
     print("=" * 50)
-    print("🚀 YASNO Schedule Parser (DTEK + ЦЕК)")
+    print("🚀 YASNO Schedule Parser (DTEK)")
     print("=" * 50)
     
     driver = None
@@ -287,23 +287,11 @@ def main():
         dtek_data = parse_osr(driver, "DTEK")
         save_schedule(dtek_data, DTEK_FILE)
         
-        # Перезавантажуємо сторінку для ЦЕК
-        print("\n🔄 Reloading for CEK...")
-        driver.get(YASNO_URL)
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_']"))
-        )
-        time.sleep(3)
-        
-        # Парсимо ЦЕК
-        cek_data = parse_osr(driver, "ЦЕК")
-        save_schedule(cek_data, CEK_FILE)
-        
         # Підсумок
         print("\n" + "=" * 50)
         print("📊 Summary:")
-        print(f"  DTEK: {sum(len(g) for g in dtek_data['today']['groups'].values())} intervals today")
-        print(f"  ЦЕК:  {sum(len(g) for g in cek_data['today']['groups'].values())} intervals today")
+        print(f"  DTEK today: {len(dtek_data['today']['groups'])} groups")
+        print(f"  DTEK tomorrow: {len(dtek_data['tomorrow']['groups'])} groups")
         print("=" * 50)
         
     except Exception as e:
