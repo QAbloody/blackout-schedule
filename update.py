@@ -9,7 +9,7 @@ import sys
 import json
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -72,6 +72,26 @@ def minutes_to_intervals(minutes: List[int]) -> List[str]:
     intervals.append(f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}")
     
     return intervals
+
+
+def parse_emergency(driver) -> Optional[str]:
+    """Перевіряє чи є екстрене повідомлення на сайті"""
+    try:
+        # Шукаємо великий текст про екстрені відключення
+        elements = driver.find_elements(By.CSS_SELECTOR, "[class*='alert'], [class*='warning'], [class*='emergency'], [class*='banner'], h1, h2, h3, div[class*='message']")
+        for el in elements:
+            text = el.text.strip().upper()
+            if "ЕКСТРЕН" in text or "ГРАФІКИ НЕ ДІЮТЬ" in text or "НЕ ДІЮТЬ" in text:
+                return el.text.strip()
+        
+        # Також перевіряємо весь текст сторінки
+        body = driver.find_element(By.TAG_NAME, "body").text.upper()
+        if "ЕКСТРЕНІ ВІДКЛЮЧЕННЯ" in body and "ГРАФІКИ НЕ ДІЮТЬ" in body:
+            return "Екстрені відключення, графіки не діють"
+        
+        return None
+    except:
+        return None
 
 
 def parse_table(driver) -> Dict[str, List[str]]:
@@ -214,6 +234,7 @@ def main():
     result = {
         "timezone": TIMEZONE,
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "emergency": None,
         "today": {"date": "", "groups": {}},
         "tomorrow": {"date": "", "groups": {}}
     }
@@ -228,10 +249,16 @@ def main():
         
         # Чекаємо завантаження
         WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_']"))
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_'], [class*='alert'], body"))
         )
         print("✅ Сторінка завантажена")
         time.sleep(3)
+        
+        # Перевіряємо екстрене повідомлення
+        emergency = parse_emergency(driver)
+        if emergency:
+            print(f"\n🚨 ЕКСТРЕНЕ ПОВІДОМЛЕННЯ: {emergency}")
+            result["emergency"] = emergency
         
         # === Парсимо СЬОГОДНІ ===
         print("\n📅 Парсинг: Сьогодні")
