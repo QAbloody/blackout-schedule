@@ -231,6 +231,16 @@ def main():
     print("🚀 YASNO Schedule Parser")
     print("=" * 60)
     
+    # Завантажуємо попередній файл якщо є
+    old_data = None
+    if os.path.exists(SCHEDULE_FILE):
+        try:
+            with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+                old_data = json.load(f)
+            print(f"📂 Завантажено попередній файл")
+        except:
+            pass
+    
     result = {
         "timezone": TIMEZONE,
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -259,6 +269,18 @@ def main():
         if emergency:
             print(f"\n🚨 ЕКСТРЕНЕ ПОВІДОМЛЕННЯ: {emergency}")
             result["emergency"] = emergency
+            
+            # Зберігаємо старі графіки якщо є екстрене повідомлення
+            if old_data:
+                result["today"] = old_data.get("today", result["today"])
+                result["tomorrow"] = old_data.get("tomorrow", result["tomorrow"])
+                print("📋 Графіки збережено з попереднього файлу")
+            
+            save_schedule(result, SCHEDULE_FILE)
+            print("\n" + "=" * 60)
+            print("🚨 Екстрені відключення - графіки не оновлено")
+            print("=" * 60)
+            return
         
         # === Парсимо СЬОГОДНІ ===
         print("\n📅 Парсинг: Сьогодні")
