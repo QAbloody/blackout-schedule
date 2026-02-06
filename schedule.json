@@ -1,7 +1,7 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-02-06 21:33:45",
-  "emergency": null,
+  "updated": "2026-02-06 21:54:28",
+  "emergency": "Екстрені відключення, графіки не діють",
   "today": {
     "date": "06.02.2026",
     "groups": {
