@@ -90,6 +90,7 @@ def fill_form_and_get_schedule(driver, street):
                 
                 setTimeout(() => {{
                     // Вводимо вулицю
+                    streetInput.disabled = false;
                     streetInput.focus();
                     streetInput.value = '{street}';
                     streetInput.dispatchEvent(new Event('input', {{bubbles: true}}));
@@ -101,42 +102,54 @@ def fill_form_and_get_schedule(driver, street):
                         
                         setTimeout(() => {{
                             // Вводимо будинок
-                            var houseInput = form.querySelector('#house');
+                            var houseInput = form.querySelector('#house_num');
+                            
+                            var finishAndGetSchedule = function() {{
+                                // Збираємо результат з таблиці
+                                var tables = document.querySelectorAll('table');
+                                var result = {{tables: tables.length, slots: [], debug: ''}};
+                                
+                                // Шукаємо правильну таблицю (без head-time і без днів тижня)
+                                for (var t of tables) {{
+                                    var html = t.outerHTML;
+                                    if (!html.includes('head-time') && !html.includes('Понеділок')) {{
+                                        result.debug = 'Found schedule table';
+                                        var cells = t.querySelectorAll('tbody td[class*="cell-"]');
+                                        for (var i = 0; i < cells.length && i < 24; i++) {{
+                                            var cls = cells[i].className;
+                                            var first = cls.includes('cell-scheduled') && !cls.includes('maybe');
+                                            var second = first;
+                                            if (cls.includes('cell-first-half')) {{ first = true; second = false; }}
+                                            if (cls.includes('cell-second-half')) {{ first = false; second = true; }}
+                                            result.slots.push(first);
+                                            result.slots.push(second);
+                                        }}
+                                        break;
+                                    }}
+                                }}
+                                
+                                if (result.slots.length === 0) {{
+                                    result.debug = 'No schedule table found, tables: ' + tables.length;
+                                }}
+                                
+                                resolve(result);
+                            }};
+                            
                             if (houseInput) {{
+                                houseInput.disabled = false;
                                 houseInput.focus();
                                 houseInput.value = '1';
                                 houseInput.dispatchEvent(new Event('input', {{bubbles: true}}));
                                 
                                 setTimeout(() => {{
-                                    var houseItems = document.querySelectorAll('#houseautocomplete-list div');
+                                    var houseItems = document.querySelectorAll('#house_numautocomplete-list div');
                                     if (houseItems.length > 0) houseItems[0].click();
                                     
-                                    setTimeout(() => {{
-                                        // Збираємо результат з таблиці
-                                        var tables = document.querySelectorAll('table');
-                                        var result = {{tables: tables.length, slots: []}};
-                                        
-                                        // Шукаємо правильну таблицю (без head-time)
-                                        for (var t of tables) {{
-                                            if (!t.innerHTML.includes('head-time') && !t.innerHTML.includes('Понеділок')) {{
-                                                var cells = t.querySelectorAll('tbody td[class*="cell-"]');
-                                                for (var i = 0; i < cells.length && i < 24; i++) {{
-                                                    var cls = cells[i].className;
-                                                    var first = cls.includes('cell-scheduled') && !cls.includes('maybe');
-                                                    var second = first;
-                                                    if (cls.includes('cell-first-half')) {{ first = true; second = false; }}
-                                                    if (cls.includes('cell-second-half')) {{ first = false; second = true; }}
-                                                    result.slots.push(first);
-                                                    result.slots.push(second);
-                                                }}
-                                                break;
-                                            }}
-                                        }}
-                                        resolve(result);
-                                    }}, 2000);
+                                    setTimeout(finishAndGetSchedule, 2000);
                                 }}, 1000);
                             }} else {{
-                                resolve({{error: 'House input not found'}});
+                                // Будинок не потрібен - спробуємо отримати графік без нього
+                                setTimeout(finishAndGetSchedule, 2000);
                             }}
                         }}, 1500);
                     }}, 1000);
@@ -193,11 +206,20 @@ def main():
                 print(f"    ❌ Error: {js_result['error']}")
                 continue
             
-            print(f"    🔍 Tables: {js_result.get('tables', 0)}, Slots: {len(js_result.get('slots', []))}")
+            print(f"    🔍 Tables: {js_result.get('tables', 0)}, Slots: {len(js_result.get('slots', []))}, Debug: {js_result.get('debug', '')}")
+            
+            # Зберігаємо скріншот для дебагу (тільки перший раз)
+            if group == "1.1":
+                try:
+                    driver.save_screenshot("debug_page.png")
+                    with open("debug_page.html", "w", encoding="utf-8") as f:
+                        f.write(driver.page_source)
+                    print(f"    📸 Debug saved")
+                except:
+                    pass
             
             slots = js_result.get("slots", [])
             if slots:
-                # Доповнюємо до 48 якщо менше
                 while len(slots) < 48:
                     slots.append(False)
                 
@@ -210,16 +232,6 @@ def main():
                     print(f"    ✅ Відключень немає")
             else:
                 print(f"    ⚠️ No slots data")
-            
-            # Зберігаємо скріншот для дебагу (тільки перший раз)
-            if group == "1.1":
-                try:
-                    driver.save_screenshot("debug_page.png")
-                    with open("debug_page.html", "w", encoding="utf-8") as f:
-                        f.write(driver.page_source)
-                    print(f"    📸 Debug saved")
-                except:
-                    pass
         
         # Зберігаємо результат
         with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
