@@ -1,9 +1,9 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-02-10 23:40:02",
+  "updated": "2026-02-11 02:34:18",
   "emergency": null,
   "today": {
-    "date": "10.02.2026",
+    "date": "11.02.2026",
     "groups": {
       "1.1": [
         "01:30-08:30",
@@ -68,7 +68,7 @@
     }
   },
   "tomorrow": {
-    "date": "11.02.2026",
+    "date": "12.02.2026",
     "groups": {}
   }
 }
