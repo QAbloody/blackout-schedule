@@ -197,23 +197,33 @@ def enter_address(driver, street: str) -> bool:
         time.sleep(1)
         time.sleep(1)
         
-        # Вводимо місто через JavaScript
-        driver.execute_script(f"""
-            var cityInput = document.getElementById('city');
-            if (cityInput) {{
-                cityInput.focus();
-                cityInput.value = '{CITY}';
-                cityInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                cityInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                cityInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
-                console.log('City input filled:', cityInput.value);
-            }} else {{
-                console.log('City input NOT FOUND');
-            }}
-        """)
-        city_value = driver.execute_script('return document.getElementById("city")?.value')
-        print(f"    🔍 DEBUG: City input value = {city_value}")
-        time.sleep(1.5)
+        # Вводимо місто - симулюємо реальне введення
+        try:
+            city_input = driver.find_element(By.CSS_SELECTOR, ".discon-schedule-form #city")
+            city_input.click()
+            time.sleep(0.5)
+            city_input.clear()
+            
+            # Вводимо посимвольно
+            for char in CITY:
+                city_input.send_keys(char)
+                time.sleep(0.05)
+            
+            time.sleep(1)
+            city_value = city_input.get_attribute("value")
+            print(f"    🔍 DEBUG: City input value = {city_value}")
+        except Exception as e:
+            print(f"    🔍 DEBUG: City input error: {e}")
+            # Fallback to JavaScript
+            driver.execute_script(f"""
+                var cityInput = document.querySelector('.discon-schedule-form #city');
+                if (cityInput) {{
+                    cityInput.focus();
+                    cityInput.value = '{CITY}';
+                    cityInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                }}
+            """)
+        time.sleep(1)
         
         # Клікаємо на перший елемент автодоповнення міста
         try:
@@ -230,21 +240,24 @@ def enter_address(driver, street: str) -> bool:
             pass
         time.sleep(1)
         
-        # Вводимо вулицю через JavaScript
-        driver.execute_script(f"""
-            var streetInput = document.getElementById('street');
-            if (streetInput) {{
-                streetInput.focus();
-                streetInput.value = '{street}';
-                streetInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                streetInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                streetInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
-                console.log('Street input filled:', streetInput.value);
-            }}
-        """)
-        street_value = driver.execute_script('return document.getElementById("street")?.value')
-        print(f"    🔍 DEBUG: Street input value = {street_value}")
-        time.sleep(1.5)
+        # Вводимо вулицю - симулюємо реальне введення
+        try:
+            street_input = driver.find_element(By.CSS_SELECTOR, ".discon-schedule-form #street")
+            street_input.click()
+            time.sleep(0.5)
+            street_input.clear()
+            
+            # Вводимо посимвольно
+            for char in street:
+                street_input.send_keys(char)
+                time.sleep(0.05)
+            
+            time.sleep(1)
+            street_value = street_input.get_attribute("value")
+            print(f"    🔍 DEBUG: Street input value = {street_value}")
+        except Exception as e:
+            print(f"    🔍 DEBUG: Street input error: {e}")
+        time.sleep(1)
         
         # Клікаємо на перший елемент автодоповнення вулиці
         try:
@@ -261,23 +274,19 @@ def enter_address(driver, street: str) -> bool:
             pass
         time.sleep(2)
         
-        # Вибираємо номер будинку (вводимо "1")
+        # Вводимо номер будинку
         try:
-            driver.execute_script("""
-                var houseInput = document.getElementById('house');
-                if (houseInput) {
-                    houseInput.focus();
-                    houseInput.value = '1';
-                    houseInput.dispatchEvent(new Event('input', { bubbles: true }));
-                    houseInput.dispatchEvent(new Event('change', { bubbles: true }));
-                    houseInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-                }
-            """)
-            house_value = driver.execute_script('return document.getElementById("house")?.value')
+            house_input = driver.find_element(By.CSS_SELECTOR, ".discon-schedule-form #house")
+            house_input.click()
+            time.sleep(0.5)
+            house_input.clear()
+            house_input.send_keys("1")
+            time.sleep(1)
+            house_value = house_input.get_attribute("value")
             print(f"    🔍 DEBUG: House input value = {house_value}")
-        except:
-            pass
-        time.sleep(1.5)
+        except Exception as e:
+            print(f"    🔍 DEBUG: House input error: {e}")
+        time.sleep(1)
         
         # Вибираємо з автодоповнення будинку
         try:
