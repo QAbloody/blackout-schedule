@@ -150,78 +150,59 @@ def enter_address(driver, street: str) -> bool:
     try:
         # Чекаємо завантаження сторінки
         WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input, select, [class*='select']"))
+            EC.presence_of_element_located((By.ID, "city"))
         )
         time.sleep(2)
         
-        # Шукаємо поле міста і вибираємо
+        # Вводимо місто через JavaScript (обходимо проблему з interactable)
+        city_input = driver.find_element(By.ID, "city")
+        driver.execute_script("arguments[0].value = '';", city_input)
+        driver.execute_script("arguments[0].click();", city_input)
+        time.sleep(0.5)
+        
+        # Вводимо місто по символу
+        for char in CITY:
+            city_input.send_keys(char)
+            time.sleep(0.05)
+        time.sleep(1)
+        
+        # Вибираємо з автодоповнення міста
         try:
-            city_select = driver.find_element(By.CSS_SELECTOR, "[class*='city'] select, select[name*='city']")
-            for option in city_select.find_elements(By.TAG_NAME, "option"):
-                if CITY in option.text:
-                    option.click()
+            city_items = driver.find_elements(By.CSS_SELECTOR, "#cityautocomplete-list div, [id*='city'] + * div, .autocomplete-items div")
+            for item in city_items:
+                if CITY.lower() in item.text.lower() or "дніпро" in item.text.lower():
+                    driver.execute_script("arguments[0].click();", item)
+                    time.sleep(1)
                     break
         except:
-            # Може місто вже вибране
-            pass
+            city_input.send_keys(Keys.RETURN)
+            time.sleep(0.5)
         
         time.sleep(1)
         
-        # Шукаємо поле вулиці
-        street_input = None
+        # Вводимо вулицю
+        street_input = driver.find_element(By.ID, "street")
+        driver.execute_script("arguments[0].value = '';", street_input)
+        driver.execute_script("arguments[0].click();", street_input)
+        time.sleep(0.5)
         
-        # Спробуємо різні селектори
-        selectors = [
-            "input[id*='street']",
-            "input[name*='street']",
-            "input[placeholder*='вулиц']",
-            "input[placeholder*='Вулиц']",
-            ".street-input input",
-            "[class*='street'] input",
-        ]
-        
-        for sel in selectors:
-            try:
-                street_input = driver.find_element(By.CSS_SELECTOR, sel)
-                if street_input.is_displayed():
-                    break
-            except:
-                continue
-        
-        if not street_input:
-            # Шукаємо всі input і беремо потрібний
-            inputs = driver.find_elements(By.TAG_NAME, "input")
-            for inp in inputs:
-                placeholder = inp.get_attribute("placeholder") or ""
-                if "вулиц" in placeholder.lower() or "street" in placeholder.lower():
-                    street_input = inp
-                    break
-        
-        if not street_input:
-            print("    ❌ Street input not found")
-            return False
-        
-        # Очищуємо і вводимо вулицю
-        street_input.clear()
-        street_input.send_keys(street)
+        # Вводимо вулицю по символу
+        for char in street:
+            street_input.send_keys(char)
+            time.sleep(0.05)
         time.sleep(1.5)
         
-        # Вибираємо з автодоповнення
+        # Вибираємо з автодоповнення вулиці
         try:
-            autocomplete = WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='autocomplete'] div, [class*='dropdown'] div, .suggestions div"))
-            )
-            
-            # Шукаємо потрібний варіант
-            items = driver.find_elements(By.CSS_SELECTOR, "[class*='autocomplete'] div, [id*='autocomplete'] div")
-            for item in items:
-                if street.lower() in item.text.lower():
-                    item.click()
+            street_items = driver.find_elements(By.CSS_SELECTOR, "#streetautocomplete-list div, [id*='street'] + * div, .autocomplete-items div")
+            for item in street_items:
+                item_text = item.text.lower()
+                street_lower = street.lower()
+                # Перевіряємо чи назва вулиці міститься
+                if street_lower in item_text or street_lower.replace("вул. ", "").replace("пров. ", "") in item_text:
+                    driver.execute_script("arguments[0].click();", item)
                     time.sleep(1)
                     break
-            else:
-                # Якщо не знайшли — натискаємо Enter
-                street_input.send_keys(Keys.RETURN)
         except:
             street_input.send_keys(Keys.RETURN)
         
@@ -234,8 +215,18 @@ def enter_address(driver, street: str) -> bool:
             )
             return True
         except:
-            print("    ⚠️ Table not found after address input")
-            return False
+            # Можливо потрібно натиснути кнопку пошуку
+            try:
+                search_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], .search-btn, [class*='submit']")
+                driver.execute_script("arguments[0].click();", search_btn)
+                time.sleep(2)
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody td[class*='cell-']"))
+                )
+                return True
+            except:
+                print("    ⚠️ Table not found after address input")
+                return False
         
     except Exception as e:
         print(f"    ❌ Address error: {e}")
