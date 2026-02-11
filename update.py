@@ -217,6 +217,11 @@ def enter_address(driver, street: str) -> bool:
         
         # Клікаємо на перший елемент автодоповнення міста
         try:
+            autocomplete_count = driver.execute_script("""
+                var items = document.querySelectorAll('#cityautocomplete-list div');
+                return items.length;
+            """)
+            print(f"    🔍 DEBUG: City autocomplete items = {autocomplete_count}")
             driver.execute_script("""
                 var items = document.querySelectorAll('#cityautocomplete-list div');
                 if (items.length > 0) items[0].click();
@@ -243,6 +248,11 @@ def enter_address(driver, street: str) -> bool:
         
         # Клікаємо на перший елемент автодоповнення вулиці
         try:
+            autocomplete_count = driver.execute_script("""
+                var items = document.querySelectorAll('#streetautocomplete-list div');
+                return items.length;
+            """)
+            print(f"    🔍 DEBUG: Street autocomplete items = {autocomplete_count}")
             driver.execute_script("""
                 var items = document.querySelectorAll('#streetautocomplete-list div');
                 if (items.length > 0) items[0].click();
@@ -256,20 +266,28 @@ def enter_address(driver, street: str) -> bool:
             driver.execute_script("""
                 var houseInput = document.getElementById('house');
                 if (houseInput) {
+                    houseInput.focus();
                     houseInput.value = '1';
                     houseInput.dispatchEvent(new Event('input', { bubbles: true }));
                     houseInput.dispatchEvent(new Event('change', { bubbles: true }));
                     houseInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
                 }
             """)
+            house_value = driver.execute_script('return document.getElementById("house")?.value')
+            print(f"    🔍 DEBUG: House input value = {house_value}")
         except:
             pass
         time.sleep(1.5)
         
         # Вибираємо з автодоповнення будинку
         try:
+            autocomplete_count = driver.execute_script("""
+                var items = document.querySelectorAll('#houseautocomplete-list div');
+                return items.length;
+            """)
+            print(f"    🔍 DEBUG: House autocomplete items = {autocomplete_count}")
             driver.execute_script("""
-                var items = document.querySelectorAll('#houseautocomplete-list div, [id*="house"] + * div');
+                var items = document.querySelectorAll('#houseautocomplete-list div');
                 if (items.length > 0) items[0].click();
             """)
         except:
