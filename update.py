@@ -234,7 +234,15 @@ def enter_address(driver, street: str) -> bool:
         
         # DEBUG: зберігаємо скріншот і HTML
         try:
-            driver.save_screenshot(f"debug_{street.replace(' ', '_')}.png")
+            debug_path = os.path.join(os.getcwd(), "debug_page.png")
+            driver.save_screenshot(debug_path)
+            print(f"    🔍 DEBUG: Screenshot saved to {debug_path}")
+            
+            html_path = os.path.join(os.getcwd(), "debug_page.html")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
+            print(f"    🔍 DEBUG: HTML saved to {html_path}")
+            
             tables = driver.find_elements(By.TAG_NAME, "table")
             print(f"    🔍 DEBUG: Found {len(tables)} tables")
             if tables:
@@ -243,6 +251,9 @@ def enter_address(driver, street: str) -> bool:
                 has_first = "cell-first-half" in html
                 has_second = "cell-second-half" in html
                 print(f"    🔍 DEBUG: Table 0 has scheduled={has_scheduled}, first-half={has_first}, second-half={has_second}")
+                
+                # Покажемо перші 500 символів таблиці
+                print(f"    🔍 DEBUG: Table 0 HTML: {html[:500]}")
         except Exception as e:
             print(f"    🔍 DEBUG error: {e}")
         
