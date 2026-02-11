@@ -163,6 +163,28 @@ def enter_address(driver, street: str) -> bool:
         )
         time.sleep(3)
         
+        # Закриваємо popup якщо є
+        try:
+            driver.execute_script("""
+                // Закриваємо модальне вікно DTEK
+                var closeBtn = document.querySelector('.modal__close, .m-attention__close, [class*="modal__close"]');
+                if (closeBtn) {
+                    closeBtn.click();
+                    console.log('Closed modal via .modal__close');
+                }
+                
+                // Також закриваємо через overlay
+                var overlay = document.querySelector('.modal__overlay');
+                if (overlay) {
+                    overlay.click();
+                }
+            """)
+            print("    🔍 DEBUG: Tried to close popup")
+        except Exception as e:
+            print(f"    🔍 DEBUG: Popup close error: {e}")
+        
+        time.sleep(2)
+        
         # Скролимо до форми
         driver.execute_script("window.scrollTo(0, 300);")
         time.sleep(1)
