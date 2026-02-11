@@ -146,66 +146,56 @@ def parse_table(driver, day: str = "today") -> List[bool]:
 
 
 def enter_address(driver, street: str) -> bool:
-    """Вводить адресу на сторінці"""
+    """Вводить адресу на сторінці через JavaScript"""
     try:
         # Чекаємо завантаження сторінки
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "city"))
         )
-        time.sleep(2)
+        time.sleep(3)
         
-        # Вводимо місто через JavaScript (обходимо проблему з interactable)
-        city_input = driver.find_element(By.ID, "city")
-        driver.execute_script("arguments[0].value = '';", city_input)
-        driver.execute_script("arguments[0].click();", city_input)
-        time.sleep(0.5)
-        
-        # Вводимо місто по символу
-        for char in CITY:
-            city_input.send_keys(char)
-            time.sleep(0.05)
+        # Скролимо до форми
+        driver.execute_script("window.scrollTo(0, 300);")
         time.sleep(1)
         
-        # Вибираємо з автодоповнення міста
-        try:
-            city_items = driver.find_elements(By.CSS_SELECTOR, "#cityautocomplete-list div, [id*='city'] + * div, .autocomplete-items div")
-            for item in city_items:
-                if CITY.lower() in item.text.lower() or "дніпро" in item.text.lower():
-                    driver.execute_script("arguments[0].click();", item)
-                    time.sleep(1)
-                    break
-        except:
-            city_input.send_keys(Keys.RETURN)
-            time.sleep(0.5)
-        
-        time.sleep(1)
-        
-        # Вводимо вулицю
-        street_input = driver.find_element(By.ID, "street")
-        driver.execute_script("arguments[0].value = '';", street_input)
-        driver.execute_script("arguments[0].click();", street_input)
-        time.sleep(0.5)
-        
-        # Вводимо вулицю по символу
-        for char in street:
-            street_input.send_keys(char)
-            time.sleep(0.05)
+        # Вводимо місто через JavaScript
+        driver.execute_script(f"""
+            var cityInput = document.getElementById('city');
+            cityInput.value = '{CITY}';
+            cityInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            cityInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            cityInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
+        """)
         time.sleep(1.5)
         
-        # Вибираємо з автодоповнення вулиці
+        # Клікаємо на перший елемент автодоповнення міста
         try:
-            street_items = driver.find_elements(By.CSS_SELECTOR, "#streetautocomplete-list div, [id*='street'] + * div, .autocomplete-items div")
-            for item in street_items:
-                item_text = item.text.lower()
-                street_lower = street.lower()
-                # Перевіряємо чи назва вулиці міститься
-                if street_lower in item_text or street_lower.replace("вул. ", "").replace("пров. ", "") in item_text:
-                    driver.execute_script("arguments[0].click();", item)
-                    time.sleep(1)
-                    break
+            driver.execute_script("""
+                var items = document.querySelectorAll('#cityautocomplete-list div');
+                if (items.length > 0) items[0].click();
+            """)
         except:
-            street_input.send_keys(Keys.RETURN)
+            pass
+        time.sleep(1)
         
+        # Вводимо вулицю через JavaScript
+        driver.execute_script(f"""
+            var streetInput = document.getElementById('street');
+            streetInput.value = '{street}';
+            streetInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            streetInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            streetInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
+        """)
+        time.sleep(1.5)
+        
+        # Клікаємо на перший елемент автодоповнення вулиці
+        try:
+            driver.execute_script("""
+                var items = document.querySelectorAll('#streetautocomplete-list div');
+                if (items.length > 0) items[0].click();
+            """)
+        except:
+            pass
         time.sleep(2)
         
         # Перевіряємо чи з'явилась таблиця
@@ -215,10 +205,12 @@ def enter_address(driver, street: str) -> bool:
             )
             return True
         except:
-            # Можливо потрібно натиснути кнопку пошуку
+            # Спробуємо натиснути кнопку якщо є
             try:
-                search_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], .search-btn, [class*='submit']")
-                driver.execute_script("arguments[0].click();", search_btn)
+                driver.execute_script("""
+                    var btns = document.querySelectorAll('button[type="submit"], .btn-search, input[type="submit"]');
+                    if (btns.length > 0) btns[0].click();
+                """)
                 time.sleep(2)
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody td[class*='cell-']"))
