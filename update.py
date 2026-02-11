@@ -227,18 +227,32 @@ def enter_address(driver, street: str) -> bool:
         
         # Клікаємо на перший елемент автодоповнення міста
         try:
+            time.sleep(1)  # Чекаємо поки з'явиться список
             autocomplete_count = driver.execute_script("""
                 var items = document.querySelectorAll('#cityautocomplete-list div');
                 return items.length;
             """)
             print(f"    🔍 DEBUG: City autocomplete items = {autocomplete_count}")
-            driver.execute_script("""
-                var items = document.querySelectorAll('#cityautocomplete-list div');
-                if (items.length > 0) items[0].click();
-            """)
-        except:
-            pass
-        time.sleep(1)
+            
+            if autocomplete_count > 0:
+                # Клікаємо через JavaScript
+                driver.execute_script("""
+                    var items = document.querySelectorAll('#cityautocomplete-list div');
+                    if (items.length > 0) {
+                        items[0].click();
+                    }
+                """)
+                time.sleep(1)
+                
+                # Перевіряємо чи клік спрацював - вулиця має стати активною
+                street_disabled = driver.execute_script("""
+                    var street = document.querySelector('.discon-schedule-form #street');
+                    return street ? street.disabled : true;
+                """)
+                print(f"    🔍 DEBUG: Street disabled after city click = {street_disabled}")
+        except Exception as e:
+            print(f"    🔍 DEBUG: City autocomplete error: {e}")
+        time.sleep(2)  # Більше часу для оновлення форми
         
         # Вводимо вулицю - симулюємо реальне введення
         try:
@@ -261,17 +275,23 @@ def enter_address(driver, street: str) -> bool:
         
         # Клікаємо на перший елемент автодоповнення вулиці
         try:
+            time.sleep(1)  # Чекаємо поки з'явиться список
             autocomplete_count = driver.execute_script("""
                 var items = document.querySelectorAll('#streetautocomplete-list div');
                 return items.length;
             """)
             print(f"    🔍 DEBUG: Street autocomplete items = {autocomplete_count}")
-            driver.execute_script("""
-                var items = document.querySelectorAll('#streetautocomplete-list div');
-                if (items.length > 0) items[0].click();
-            """)
-        except:
-            pass
+            
+            if autocomplete_count > 0:
+                driver.execute_script("""
+                    var items = document.querySelectorAll('#streetautocomplete-list div');
+                    if (items.length > 0) {
+                        items[0].click();
+                    }
+                """)
+                time.sleep(1)
+        except Exception as e:
+            print(f"    🔍 DEBUG: Street autocomplete error: {e}")
         time.sleep(2)
         
         # Вводимо номер будинку
