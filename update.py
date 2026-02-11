@@ -207,20 +207,26 @@ def enter_address(driver, street: str) -> bool:
             pass
         time.sleep(2)
         
-        # Вибираємо номер будинку (перший доступний)
+        # Вибираємо номер будинку (вводимо "1")
         try:
             driver.execute_script("""
-                var houseSelect = document.getElementById('house') || document.querySelector('select[name="house"]');
-                if (houseSelect) {
-                    var options = houseSelect.querySelectorAll('option');
-                    for (var i = 0; i < options.length; i++) {
-                        if (options[i].value && options[i].value !== '') {
-                            houseSelect.value = options[i].value;
-                            houseSelect.dispatchEvent(new Event('change', { bubbles: true }));
-                            break;
-                        }
-                    }
+                var houseInput = document.getElementById('house');
+                if (houseInput) {
+                    houseInput.value = '1';
+                    houseInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    houseInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    houseInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
                 }
+            """)
+        except:
+            pass
+        time.sleep(1.5)
+        
+        # Вибираємо з автодоповнення будинку
+        try:
+            driver.execute_script("""
+                var items = document.querySelectorAll('#houseautocomplete-list div, [id*="house"] + * div');
+                if (items.length > 0) items[0].click();
             """)
         except:
             pass
