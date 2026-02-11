@@ -232,6 +232,20 @@ def enter_address(driver, street: str) -> bool:
             pass
         time.sleep(2)
         
+        # DEBUG: зберігаємо скріншот і HTML
+        try:
+            driver.save_screenshot(f"debug_{street.replace(' ', '_')}.png")
+            tables = driver.find_elements(By.TAG_NAME, "table")
+            print(f"    🔍 DEBUG: Found {len(tables)} tables")
+            if tables:
+                html = tables[0].get_attribute("outerHTML")
+                has_scheduled = "cell-scheduled" in html and "cell-scheduled-maybe" not in html.split("cell-scheduled")[0]
+                has_first = "cell-first-half" in html
+                has_second = "cell-second-half" in html
+                print(f"    🔍 DEBUG: Table 0 has scheduled={has_scheduled}, first-half={has_first}, second-half={has_second}")
+        except Exception as e:
+            print(f"    🔍 DEBUG error: {e}")
+        
         # Перевіряємо чи з'явилась таблиця з графіком
         try:
             WebDriverWait(driver, 10).until(
