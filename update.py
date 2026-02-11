@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DTEK Schedule Parser - Simplified version
+DTEK Schedule Parser - Using Selenium ActionChains
 """
 
 import os
@@ -11,12 +11,10 @@ from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# КОНФІГУРАЦІЯ
-# ═══════════════════════════════════════════════════════════════════════════════
 
 DTEK_URL = "https://www.dtek-dnem.com.ua/ua/shutdowns"
 CITY = "м. Дніпро"
@@ -43,7 +41,6 @@ def setup_driver():
 
 
 def slots_to_intervals(slots):
-    """48 слотів → інтервали"""
     if not any(slots):
         return []
     intervals = []
@@ -62,137 +59,158 @@ def slots_to_intervals(slots):
     return intervals
 
 
-def fill_form_and_get_schedule(driver, street):
-    """Заповнює форму і отримує графік через JavaScript"""
-    
-    js_code = f"""
-    return new Promise((resolve) => {{
-        // Закриваємо popup
-        var closeBtn = document.querySelector('.modal__close, .m-attention__close');
-        if (closeBtn) closeBtn.click();
-        
-        setTimeout(() => {{
-            var form = document.querySelector('.discon-schedule-form');
-            if (!form) {{ resolve({{error: 'Form not found'}}); return; }}
-            
-            var cityInput = form.querySelector('#city');
-            var streetInput = form.querySelector('#street');
-            
-            // Симулюємо введення міста посимвольно
-            cityInput.focus();
-            var cityText = '{CITY}';
-            var cityIndex = 0;
-            
-            function typeCity() {{
-                if (cityIndex < cityText.length) {{
-                    cityInput.value += cityText[cityIndex];
-                    cityInput.dispatchEvent(new Event('input', {{bubbles: true}}));
-                    cityInput.dispatchEvent(new KeyboardEvent('keyup', {{key: cityText[cityIndex], bubbles: true}}));
-                    cityIndex++;
-                    setTimeout(typeCity, 50);
-                }} else {{
-                    // Після введення міста - чекаємо і клікаємо на автодоповнення
-                    setTimeout(() => {{
-                        var cityItems = document.querySelectorAll('#cityautocomplete-list div, .autocomplete-items div');
-                        console.log('City autocomplete items:', cityItems.length);
-                        if (cityItems.length > 0) {{
-                            cityItems[0].click();
-                        }}
-                        
-                        setTimeout(() => {{
-                            // Вводимо вулицю
-                            streetInput.disabled = false;
-                            streetInput.focus();
-                            var streetText = '{street}';
-                            var streetIndex = 0;
-                            
-                            function typeStreet() {{
-                                if (streetIndex < streetText.length) {{
-                                    streetInput.value += streetText[streetIndex];
-                                    streetInput.dispatchEvent(new Event('input', {{bubbles: true}}));
-                                    streetInput.dispatchEvent(new KeyboardEvent('keyup', {{key: streetText[streetIndex], bubbles: true}}));
-                                    streetIndex++;
-                                    setTimeout(typeStreet, 50);
-                                }} else {{
-                                    setTimeout(() => {{
-                                        var streetItems = document.querySelectorAll('#streetautocomplete-list div, .autocomplete-items div');
-                                        console.log('Street autocomplete items:', streetItems.length);
-                                        if (streetItems.length > 0) {{
-                                            streetItems[0].click();
-                                        }}
-                                        
-                                        setTimeout(() => {{
-                                            // Вводимо будинок
-                                            var houseInput = form.querySelector('#house_num');
-                                            if (houseInput) {{
-                                                houseInput.disabled = false;
-                                                houseInput.focus();
-                                                houseInput.value = '1';
-                                                houseInput.dispatchEvent(new Event('input', {{bubbles: true}}));
-                                                
-                                                setTimeout(() => {{
-                                                    var houseItems = document.querySelectorAll('#house_numautocomplete-list div, .autocomplete-items div');
-                                                    if (houseItems.length > 0) houseItems[0].click();
-                                                    
-                                                    setTimeout(finishAndGetSchedule, 3000);
-                                                }}, 1500);
-                                            }} else {{
-                                                setTimeout(finishAndGetSchedule, 3000);
-                                            }}
-                                        }}, 2000);
-                                    }}, 1500);
-                                }}
-                            }}
-                            typeStreet();
-                        }}, 2000);
-                    }}, 1500);
-                }}
-            }}
-            
-            var finishAndGetSchedule = function() {{
-                var tables = document.querySelectorAll('table');
-                var result = {{tables: tables.length, slots: [], debug: ''}};
-                
-                for (var t of tables) {{
-                    var html = t.outerHTML;
-                    if (!html.includes('head-time') && !html.includes('Понеділок')) {{
-                        result.debug = 'Found schedule table';
-                        var cells = t.querySelectorAll('tbody td[class*="cell-"]');
-                        for (var i = 0; i < cells.length && i < 24; i++) {{
-                            var cls = cells[i].className;
-                            var first = cls.includes('cell-scheduled') && !cls.includes('maybe');
-                            var second = first;
-                            if (cls.includes('cell-first-half')) {{ first = true; second = false; }}
-                            if (cls.includes('cell-second-half')) {{ first = false; second = true; }}
-                            result.slots.push(first);
-                            result.slots.push(second);
-                        }}
-                        break;
-                    }}
-                }}
-                
-                if (result.slots.length === 0) {{
-                    result.debug = 'No schedule table, tables: ' + tables.length;
-                    // Додаємо інфо про форму
-                    var city = document.querySelector('#city');
-                    var street = document.querySelector('#street');
-                    result.debug += ', city=' + (city ? city.value : 'null');
-                    result.debug += ', street=' + (street ? street.value : 'null');
-                }}
-                
-                resolve(result);
-            }};
-            
-            typeCity();
-        }}, 1500);
-    }});
-    """
+def close_popup(driver):
+    """Закриває popup"""
+    try:
+        driver.execute_script("""
+            var closeBtn = document.querySelector('.modal__close, .m-attention__close');
+            if (closeBtn) closeBtn.click();
+        """)
+        time.sleep(1)
+    except:
+        pass
+
+
+def fill_form(driver, street):
+    """Заповнює форму через ActionChains"""
+    actions = ActionChains(driver)
     
     try:
-        result = driver.execute_script(js_code)
-        return result
+        # Чекаємо форму
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".discon-schedule-form #city"))
+        )
+        
+        # Закриваємо popup
+        close_popup(driver)
+        time.sleep(2)
+        
+        # === МІСТО ===
+        city_input = driver.find_element(By.CSS_SELECTOR, ".discon-schedule-form #city")
+        
+        # Скролимо до елемента
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", city_input)
+        time.sleep(0.5)
+        
+        # Клікаємо через JavaScript
+        driver.execute_script("arguments[0].click(); arguments[0].focus();", city_input)
+        time.sleep(0.5)
+        
+        # Вводимо текст через ActionChains
+        actions.move_to_element(city_input).click().send_keys(CITY).perform()
+        time.sleep(2)
+        
+        city_value = city_input.get_attribute("value")
+        print(f"    🔍 City value: {city_value}")
+        
+        # Клікаємо на перший елемент автодоповнення
+        try:
+            autocomplete = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "#cityautocomplete-list div, [class*='autocomplete'] div"))
+            )
+            autocomplete.click()
+            print(f"    🔍 City autocomplete clicked")
+        except:
+            # Якщо немає автодоповнення - натискаємо Enter
+            city_input.send_keys(Keys.RETURN)
+            print(f"    🔍 City: pressed Enter")
+        time.sleep(2)
+        
+        # === ВУЛИЦЯ ===
+        street_input = driver.find_element(By.CSS_SELECTOR, ".discon-schedule-form #street")
+        
+        # Перевіряємо чи активна
+        if street_input.get_attribute("disabled"):
+            driver.execute_script("arguments[0].disabled = false;", street_input)
+        
+        driver.execute_script("arguments[0].click(); arguments[0].focus();", street_input)
+        time.sleep(0.5)
+        
+        actions = ActionChains(driver)
+        actions.move_to_element(street_input).click().send_keys(street).perform()
+        time.sleep(2)
+        
+        street_value = street_input.get_attribute("value")
+        print(f"    🔍 Street value: {street_value}")
+        
+        # Клікаємо на автодоповнення
+        try:
+            autocomplete = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "#streetautocomplete-list div, [class*='autocomplete'] div"))
+            )
+            autocomplete.click()
+            print(f"    🔍 Street autocomplete clicked")
+        except:
+            street_input.send_keys(Keys.RETURN)
+            print(f"    🔍 Street: pressed Enter")
+        time.sleep(2)
+        
+        # === БУДИНОК ===
+        try:
+            house_input = driver.find_element(By.CSS_SELECTOR, ".discon-schedule-form #house_num")
+            
+            if house_input.get_attribute("disabled"):
+                driver.execute_script("arguments[0].disabled = false;", house_input)
+            
+            driver.execute_script("arguments[0].click(); arguments[0].focus();", house_input)
+            time.sleep(0.5)
+            
+            actions = ActionChains(driver)
+            actions.move_to_element(house_input).click().send_keys("1").perform()
+            time.sleep(1.5)
+            
+            house_value = house_input.get_attribute("value")
+            print(f"    🔍 House value: {house_value}")
+            
+            # Клікаємо на автодоповнення
+            try:
+                autocomplete = WebDriverWait(driver, 3).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "#house_numautocomplete-list div, [class*='autocomplete'] div"))
+                )
+                autocomplete.click()
+            except:
+                house_input.send_keys(Keys.RETURN)
+        except Exception as e:
+            print(f"    🔍 House error: {e}")
+        
+        time.sleep(3)
+        return True
+        
     except Exception as e:
-        return {"error": str(e)}
+        print(f"    ❌ Form error: {e}")
+        return False
+
+
+def parse_schedule(driver):
+    """Парсить таблицю з графіком"""
+    slots = [False] * 48
+    
+    try:
+        tables = driver.find_elements(By.TAG_NAME, "table")
+        print(f"    🔍 Found {len(tables)} tables")
+        
+        for t in tables:
+            html = t.get_attribute("outerHTML")
+            # Шукаємо таблицю БЕЗ head-time (це графік на сьогодні)
+            if "head-time" not in html and "Понеділок" not in html:
+                cells = t.find_elements(By.CSS_SELECTOR, "tbody td[class*='cell-']")
+                print(f"    🔍 Schedule table found, cells: {len(cells)}")
+                
+                for i, cell in enumerate(cells[:24]):
+                    cls = cell.get_attribute("class")
+                    first = "cell-scheduled" in cls and "maybe" not in cls
+                    second = first
+                    if "cell-first-half" in cls:
+                        first, second = True, False
+                    if "cell-second-half" in cls:
+                        first, second = False, True
+                    slots[i * 2] = first
+                    slots[i * 2 + 1] = second
+                break
+    except Exception as e:
+        print(f"    ❌ Parse error: {e}")
+    
+    return slots
 
 
 def main():
@@ -205,7 +223,6 @@ def main():
     tomorrow = (now + timedelta(days=1)).strftime("%d.%m.%Y")
     
     print(f"\n📅 Сьогодні: {today}")
-    print(f"📅 Завтра: {tomorrow}")
     print(f"📋 Груп: {len(GROUP_ADDRESSES)}\n")
     
     result = {
@@ -228,50 +245,33 @@ def main():
             driver.get(DTEK_URL)
             time.sleep(3)
             
-            # Заповнюємо форму через JavaScript
-            js_result = fill_form_and_get_schedule(driver, street)
+            if fill_form(driver, street):
+                slots = parse_schedule(driver)
+                
+                if any(slots):
+                    intervals = slots_to_intervals(slots)
+                    result["today"]["groups"][group] = intervals
+                    total = sum(slots) * 30
+                    print(f"    ✅ {intervals} ({total // 60}год {total % 60:02d}хв)")
+                else:
+                    print(f"    ✅ Відключень немає")
+            else:
+                print(f"    ⚠️ Form failed")
             
-            if "error" in js_result:
-                print(f"    ❌ Error: {js_result['error']}")
-                continue
-            
-            print(f"    🔍 Tables: {js_result.get('tables', 0)}, Slots: {len(js_result.get('slots', []))}, Debug: {js_result.get('debug', '')}")
-            
-            # Зберігаємо скріншот для дебагу (тільки перший раз)
+            # Debug screenshot (only first)
             if group == "1.1":
                 try:
                     driver.save_screenshot("debug_page.png")
                     with open("debug_page.html", "w", encoding="utf-8") as f:
                         f.write(driver.page_source)
-                    print(f"    📸 Debug saved")
                 except:
                     pass
-            
-            slots = js_result.get("slots", [])
-            if slots:
-                while len(slots) < 48:
-                    slots.append(False)
-                
-                intervals = slots_to_intervals(slots)
-                if intervals:
-                    result["today"]["groups"][group] = intervals
-                    total_mins = sum(slots[:48]) * 30
-                    print(f"    ✅ {intervals} ({total_mins // 60}год {total_mins % 60:02d}хв)")
-                else:
-                    print(f"    ✅ Відключень немає")
-            else:
-                print(f"    ⚠️ No slots data")
         
-        # Зберігаємо результат
         with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         
         print(f"\n💾 Збережено: {SCHEDULE_FILE}")
-        
-        print("\n" + "=" * 60)
-        print("📊 ПІДСУМОК:")
-        print(f"  Сьогодні: {len(result['today']['groups'])} груп")
-        print("=" * 60)
+        print(f"📊 Груп з графіком: {len(result['today']['groups'])}")
         
     except Exception as e:
         print(f"\n❌ Error: {e}")
@@ -281,7 +281,7 @@ def main():
     finally:
         if driver:
             driver.quit()
-            print("\n👋 Браузер закрито")
+            print("👋 Done")
 
 
 if __name__ == "__main__":
