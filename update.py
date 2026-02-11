@@ -211,7 +211,8 @@ def enter_address(driver, street: str) -> bool:
                 console.log('City input NOT FOUND');
             }}
         """)
-        print(f"    🔍 DEBUG: City input value = {driver.execute_script('return document.getElementById(\"city\")?.value')}")
+        city_value = driver.execute_script('return document.getElementById("city")?.value')
+        print(f"    🔍 DEBUG: City input value = {city_value}")
         time.sleep(1.5)
         
         # Клікаємо на перший елемент автодоповнення міста
@@ -236,7 +237,8 @@ def enter_address(driver, street: str) -> bool:
                 console.log('Street input filled:', streetInput.value);
             }}
         """)
-        print(f"    🔍 DEBUG: Street input value = {driver.execute_script('return document.getElementById(\"street\")?.value')}")
+        street_value = driver.execute_script('return document.getElementById("street")?.value')
+        print(f"    🔍 DEBUG: Street input value = {street_value}")
         time.sleep(1.5)
         
         # Клікаємо на перший елемент автодоповнення вулиці
