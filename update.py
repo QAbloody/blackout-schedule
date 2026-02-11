@@ -185,18 +185,33 @@ def enter_address(driver, street: str) -> bool:
         
         time.sleep(2)
         
-        # Скролимо до форми
-        driver.execute_script("window.scrollTo(0, 300);")
+        # Скролимо до форми вводу адреси
+        driver.execute_script("""
+            var form = document.querySelector('.discon-schedule-form, #city');
+            if (form) {
+                form.scrollIntoView({behavior: 'instant', block: 'center'});
+            } else {
+                window.scrollTo(0, 0);  // Скролимо на початок сторінки
+            }
+        """)
+        time.sleep(1)
         time.sleep(1)
         
         # Вводимо місто через JavaScript
         driver.execute_script(f"""
             var cityInput = document.getElementById('city');
-            cityInput.value = '{CITY}';
-            cityInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            cityInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            cityInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
+            if (cityInput) {{
+                cityInput.focus();
+                cityInput.value = '{CITY}';
+                cityInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                cityInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                cityInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
+                console.log('City input filled:', cityInput.value);
+            }} else {{
+                console.log('City input NOT FOUND');
+            }}
         """)
+        print(f"    🔍 DEBUG: City input value = {driver.execute_script('return document.getElementById(\"city\")?.value')}")
         time.sleep(1.5)
         
         # Клікаємо на перший елемент автодоповнення міста
@@ -212,11 +227,16 @@ def enter_address(driver, street: str) -> bool:
         # Вводимо вулицю через JavaScript
         driver.execute_script(f"""
             var streetInput = document.getElementById('street');
-            streetInput.value = '{street}';
-            streetInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            streetInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            streetInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
+            if (streetInput) {{
+                streetInput.focus();
+                streetInput.value = '{street}';
+                streetInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                streetInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                streetInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
+                console.log('Street input filled:', streetInput.value);
+            }}
         """)
+        print(f"    🔍 DEBUG: Street input value = {driver.execute_script('return document.getElementById(\"street\")?.value')}")
         time.sleep(1.5)
         
         # Клікаємо на перший елемент автодоповнення вулиці
