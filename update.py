@@ -1,175 +1,245 @@
 #!/usr/bin/env python3
 """
-DTEK Schedule Parser
-Парсить графіки відключень через API dtek-dnem.com.ua
+DTEK Schedule Parser (Selenium)
+Парсить графіки відключень з dtek-dnem.com.ua через таблицю
 """
 
 import os
+import sys
 import json
-import requests
+import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Optional
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # КОНФІГУРАЦІЯ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-API_URL = "https://www.dtek-dnem.com.ua/ua/ajax"
+DTEK_URL = "https://www.dtek-dnem.com.ua/ua/shutdowns"
 CITY = "м. Дніпро"
 SCHEDULE_FILE = os.getenv("SCHEDULE_FILE", "schedule.json")
 
 # Еталонні адреси для кожної групи
-# Формат: "група": ("вулиця", "будинок")
 GROUP_ADDRESSES = {
-    "1.1": ("пров. Парковий", "1"),
-    "1.2": ("вул. Мохова", "1"),
-    "3.1": ("вул. Центральна", "1"),
-    "3.2": ("вул. Холодильна", "1"),
-    "5.1": ("пров. Морський", "1"),
-    "5.2": ("вул. Автодорожна", "1"),
+    "1.1": "пров. Парковий",
+    "1.2": "вул. Мохова",
+    "3.1": "вул. Центральна",
+    "3.2": "вул. Холодильна",
+    "5.1": "пров. Морський",
+    "5.2": "вул. Автодорожна",
     # Додай після знаходження:
-    # "2.1": ("вул. ???", "1"),
-    # "2.2": ("вул. ???", "1"),
-    # "4.1": ("вул. ???", "1"),
-    # "4.2": ("вул. ???", "1"),
-    # "6.1": ("вул. ???", "1"),
-    # "6.2": ("вул. ???", "1"),
+    # "2.1": "вул. ???",
+    # "2.2": "вул. ???",
+    # "4.1": "вул. ???",
+    # "4.2": "вул. ???",
+    # "6.1": "вул. ???",
+    # "6.2": "вул. ???",
 }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# API ФУНКЦІЇ
+# ДОПОМІЖНІ ФУНКЦІЇ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def fetch_street_data(street: str) -> Optional[Dict]:
-    """Запитує дані по вулиці"""
+def setup_driver() -> webdriver.Chrome:
+    """Налаштовує Chrome WebDriver"""
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    return webdriver.Chrome(options=options)
+
+
+def slots_to_intervals(slots: List[bool]) -> List[str]:
+    """
+    Конвертує 48 слотів (по 30 хв) в інтервали
+    [True, True, False, False, True, ...] → ["00:00-01:00", "02:00-02:30"]
+    """
+    if not any(slots):
+        return []
+    
+    intervals = []
+    i = 0
+    while i < 48:
+        if slots[i]:
+            start = i
+            while i < 48 and slots[i]:
+                i += 1
+            end = i
+            
+            start_h, start_m = divmod(start * 30, 60)
+            end_h, end_m = divmod(end * 30, 60)
+            intervals.append(f"{start_h:02d}:{start_m:02d}-{end_h:02d}:{end_m:02d}")
+        else:
+            i += 1
+    
+    return intervals
+
+
+def parse_table(driver, day: str = "today") -> List[bool]:
+    """
+    Парсить таблицю графіку
+    Повертає 48 слотів (по 30 хв): True = немає світла
+    """
+    slots = [False] * 48
+    
     try:
-        data = {
-            "method": "getHomeNum",
-            "data[0][name]": "city",
-            "data[0][value]": CITY,
-            "data[1][name]": "street",
-            "data[1][value]": street,
-            "data[2][name]": "updateFact",
-            "data[2][value]": datetime.now().strftime("%d.%m.%Y %H:%M"),
-        }
+        # Клікаємо на потрібну вкладку (сьогодні/завтра)
+        if day == "tomorrow":
+            try:
+                tabs = driver.find_elements(By.CSS_SELECTOR, ".tabs-schedule button, .schedule-tabs button, [class*='tab']")
+                for tab in tabs:
+                    if "завтра" in tab.text.lower():
+                        tab.click()
+                        time.sleep(1)
+                        break
+            except:
+                pass
         
-        r = requests.post(API_URL, data=data, timeout=15)
-        r.raise_for_status()
-        result = r.json()
+        # Шукаємо таблицю
+        table = driver.find_element(By.CSS_SELECTOR, "table")
         
-        if result.get("result") and result.get("data"):
-            return result
-        return None
+        # Шукаємо tbody tr з комірками
+        rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
+        
+        for row in rows:
+            cells = row.find_elements(By.TAG_NAME, "td")
+            
+            # Пропускаємо перші 1-2 комірки (заголовок рядка)
+            hour_cells = [c for c in cells if c.get_attribute("class") and "cell-" in c.get_attribute("class")]
+            
+            if not hour_cells:
+                # Якщо немає класів — беремо всі td крім перших
+                hour_cells = cells[1:] if len(cells) > 24 else cells
+            
+            for hour, cell in enumerate(hour_cells[:24]):
+                cell_class = cell.get_attribute("class") or ""
+                
+                first_half = False
+                second_half = False
+                
+                if "cell-scheduled" in cell_class:
+                    first_half, second_half = True, True
+                elif "cell-first-half" in cell_class:
+                    first_half = True
+                elif "cell-second-half" in cell_class:
+                    second_half = True
+                # cell-non-scheduled = False, False
+                
+                slots[hour * 2] = first_half
+                slots[hour * 2 + 1] = second_half
         
     except Exception as e:
-        print(f"  ❌ API Error: {e}")
-        return None
+        print(f"    ❌ Parse error: {e}")
+    
+    return slots
 
 
-def parse_outages(api_data: Dict, target_group: str) -> List[Dict]:
-    """
-    Парсить відключення для конкретної групи
-    Повертає список: [{"start": "HH:MM DD.MM.YYYY", "end": "...", "type": "..."}]
-    """
-    outages = []
-    
-    if not api_data or not api_data.get("data"):
-        return outages
-    
-    target_gpv = f"GPV{target_group}"
-    
-    for house, info in api_data["data"].items():
-        reasons = info.get("sub_type_reason", [])
+def enter_address(driver, street: str) -> bool:
+    """Вводить адресу на сторінці"""
+    try:
+        # Чекаємо завантаження сторінки
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "input, select, [class*='select']"))
+        )
+        time.sleep(2)
         
-        if target_gpv in reasons:
-            start = info.get("start_date", "")
-            end = info.get("end_date", "")
-            sub_type = info.get("sub_type", "")
-            
-            if start and end:
-                outages.append({
-                    "start": start,
-                    "end": end,
-                    "type": sub_type,
-                    "house": house
-                })
-    
-    return outages
-
-
-def outages_to_intervals(outages: List[Dict], target_date: str) -> List[str]:
-    """
-    Конвертує відключення в інтервали для конкретної дати
-    target_date: "DD.MM.YYYY"
-    Повертає: ["08:00-12:00", "16:00-20:00"]
-    """
-    intervals = []
-    
-    for outage in outages:
+        # Шукаємо поле міста і вибираємо
         try:
-            # Парсимо дати: "HH:MM DD.MM.YYYY"
-            start_str = outage["start"]
-            end_str = outage["end"]
-            
-            start_time, start_date = start_str.split(" ")
-            end_time, end_date = end_str.split(" ")
-            
-            # Перевіряємо чи відключення стосується цільової дати
-            if start_date == target_date or end_date == target_date:
-                # Якщо початок раніше цільової дати — починаємо з 00:00
-                if start_date < target_date:
-                    start_time = "00:00"
-                # Якщо кінець пізніше цільової дати — закінчуємо о 24:00
-                if end_date > target_date:
-                    end_time = "24:00"
-                
-                intervals.append(f"{start_time}-{end_time}")
-                
-        except Exception as e:
-            print(f"  ⚠️ Parse error: {e}")
-    
-    return merge_intervals(intervals)
-
-
-def merge_intervals(intervals: List[str]) -> List[str]:
-    """Об'єднує перекриваючі інтервали"""
-    if not intervals:
-        return []
-    
-    # Конвертуємо в хвилини
-    mins = []
-    for iv in intervals:
-        try:
-            start, end = iv.split("-")
-            sh, sm = map(int, start.split(":"))
-            eh, em = map(int, end.split(":"))
-            mins.append((sh * 60 + sm, eh * 60 + em))
+            city_select = driver.find_element(By.CSS_SELECTOR, "[class*='city'] select, select[name*='city']")
+            for option in city_select.find_elements(By.TAG_NAME, "option"):
+                if CITY in option.text:
+                    option.click()
+                    break
         except:
-            continue
-    
-    if not mins:
-        return []
-    
-    # Сортуємо і об'єднуємо
-    mins.sort()
-    merged = [mins[0]]
-    
-    for start, end in mins[1:]:
-        last_start, last_end = merged[-1]
-        if start <= last_end:
-            merged[-1] = (last_start, max(last_end, end))
-        else:
-            merged.append((start, end))
-    
-    # Конвертуємо назад
-    result = []
-    for start, end in merged:
-        sh, sm = divmod(start, 60)
-        eh, em = divmod(end, 60)
-        result.append(f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}")
-    
-    return result
+            # Може місто вже вибране
+            pass
+        
+        time.sleep(1)
+        
+        # Шукаємо поле вулиці
+        street_input = None
+        
+        # Спробуємо різні селектори
+        selectors = [
+            "input[id*='street']",
+            "input[name*='street']",
+            "input[placeholder*='вулиц']",
+            "input[placeholder*='Вулиц']",
+            ".street-input input",
+            "[class*='street'] input",
+        ]
+        
+        for sel in selectors:
+            try:
+                street_input = driver.find_element(By.CSS_SELECTOR, sel)
+                if street_input.is_displayed():
+                    break
+            except:
+                continue
+        
+        if not street_input:
+            # Шукаємо всі input і беремо потрібний
+            inputs = driver.find_elements(By.TAG_NAME, "input")
+            for inp in inputs:
+                placeholder = inp.get_attribute("placeholder") or ""
+                if "вулиц" in placeholder.lower() or "street" in placeholder.lower():
+                    street_input = inp
+                    break
+        
+        if not street_input:
+            print("    ❌ Street input not found")
+            return False
+        
+        # Очищуємо і вводимо вулицю
+        street_input.clear()
+        street_input.send_keys(street)
+        time.sleep(1.5)
+        
+        # Вибираємо з автодоповнення
+        try:
+            autocomplete = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='autocomplete'] div, [class*='dropdown'] div, .suggestions div"))
+            )
+            
+            # Шукаємо потрібний варіант
+            items = driver.find_elements(By.CSS_SELECTOR, "[class*='autocomplete'] div, [id*='autocomplete'] div")
+            for item in items:
+                if street.lower() in item.text.lower():
+                    item.click()
+                    time.sleep(1)
+                    break
+            else:
+                # Якщо не знайшли — натискаємо Enter
+                street_input.send_keys(Keys.RETURN)
+        except:
+            street_input.send_keys(Keys.RETURN)
+        
+        time.sleep(2)
+        
+        # Перевіряємо чи з'явилась таблиця
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody td[class*='cell-']"))
+            )
+            return True
+        except:
+            print("    ⚠️ Table not found after address input")
+            return False
+        
+    except Exception as e:
+        print(f"    ❌ Address error: {e}")
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -178,7 +248,7 @@ def merge_intervals(intervals: List[str]) -> List[str]:
 
 def main():
     print("=" * 60)
-    print("🚀 DTEK Schedule Parser")
+    print("🚀 DTEK Schedule Parser (Table)")
     print("=" * 60)
     
     now = datetime.now()
@@ -198,53 +268,78 @@ def main():
         "tomorrow": {"date": tomorrow, "groups": {}}
     }
     
-    # Збираємо дані по кожній групі
-    for group, (street, house) in GROUP_ADDRESSES.items():
-        print(f"📍 Група {group}: {street}...")
-        
-        api_data = fetch_street_data(street)
-        
-        if not api_data:
-            print(f"  ⚠️ Немає даних")
-            continue
-        
-        # Перевіряємо екстрені відключення
-        update_ts = api_data.get("updateTimestamp", "")
-        
-        # Парсимо відключення
-        outages = parse_outages(api_data, group)
-        
-        if outages:
-            print(f"  ✅ Знайдено {len(outages)} відключень")
-            
-            # Конвертуємо в інтервали
-            today_intervals = outages_to_intervals(outages, today)
-            tomorrow_intervals = outages_to_intervals(outages, tomorrow)
-            
-            if today_intervals:
-                result["today"]["groups"][group] = today_intervals
-                print(f"     Сьогодні: {today_intervals}")
-            
-            if tomorrow_intervals:
-                result["tomorrow"]["groups"][group] = tomorrow_intervals
-                print(f"     Завтра: {tomorrow_intervals}")
-        else:
-            print(f"  ✅ Відключень немає")
+    driver = None
     
-    # Зберігаємо
-    with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-    
-    print(f"\n💾 Збережено: {SCHEDULE_FILE}")
-    
-    # Підсумок
-    print("\n" + "=" * 60)
-    print("📊 ПІДСУМОК:")
-    today_count = len(result["today"]["groups"])
-    tomorrow_count = len(result["tomorrow"]["groups"])
-    print(f"  Сьогодні: {today_count} груп з відключеннями")
-    print(f"  Завтра: {tomorrow_count} груп з відключеннями")
-    print("=" * 60)
+    try:
+        driver = setup_driver()
+        
+        for group, street in GROUP_ADDRESSES.items():
+            print(f"📍 Група {group}: {street}...")
+            
+            # Відкриваємо сторінку заново для кожної групи
+            driver.get(DTEK_URL)
+            time.sleep(2)
+            
+            # Вводимо адресу
+            if not enter_address(driver, street):
+                print(f"    ⚠️ Не вдалося ввести адресу")
+                continue
+            
+            # Парсимо таблицю (сьогодні)
+            slots_today = parse_table(driver, "today")
+            intervals_today = slots_to_intervals(slots_today)
+            
+            if intervals_today:
+                result["today"]["groups"][group] = intervals_today
+                total_mins = sum(slots_today) * 30
+                print(f"    ✅ Сьогодні: {intervals_today} ({total_mins // 60}год {total_mins % 60:02d}хв)")
+            else:
+                print(f"    ✅ Сьогодні: відключень немає")
+            
+            # Парсимо таблицю (завтра) - якщо є вкладка
+            try:
+                slots_tomorrow = parse_table(driver, "tomorrow")
+                intervals_tomorrow = slots_to_intervals(slots_tomorrow)
+                
+                if intervals_tomorrow and intervals_tomorrow != intervals_today:
+                    result["tomorrow"]["groups"][group] = intervals_tomorrow
+                    print(f"    ✅ Завтра: {intervals_tomorrow}")
+            except:
+                pass
+        
+        # Зберігаємо
+        with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        
+        print(f"\n💾 Збережено: {SCHEDULE_FILE}")
+        
+        # Підсумок
+        print("\n" + "=" * 60)
+        print("📊 ПІДСУМОК:")
+        print(f"  Сьогодні: {len(result['today']['groups'])} груп")
+        print(f"  Завтра: {len(result['tomorrow']['groups'])} груп")
+        
+        for group in sorted(result["today"]["groups"].keys()):
+            ivs = result["today"]["groups"][group]
+            total = sum(
+                (int(iv.split("-")[1].split(":")[0]) * 60 + int(iv.split("-")[1].split(":")[1])) -
+                (int(iv.split("-")[0].split(":")[0]) * 60 + int(iv.split("-")[0].split(":")[1]))
+                for iv in ivs
+            )
+            print(f"    {group}: {total // 60}год {total % 60:02d}хв")
+        
+        print("=" * 60)
+        
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+        
+    finally:
+        if driver:
+            driver.quit()
+            print("\n👋 Браузер закрито")
 
 
 if __name__ == "__main__":
