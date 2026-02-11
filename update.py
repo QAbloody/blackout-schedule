@@ -1,225 +1,175 @@
 #!/usr/bin/env python3
 """
-YASNO Schedule Parser
-Парсить графіки відключень з static.yasno.ua для Дніпра
+DTEK Schedule Parser
+Парсить графіки відключень через API dtek-dnem.com.ua
 """
 
 import os
-import sys
 import json
-import time
+import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
-
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # КОНФІГУРАЦІЯ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-YASNO_URL = "https://static.yasno.ua/dnipro/outages"
+API_URL = "https://www.dtek-dnem.com.ua/ua/ajax"
+CITY = "м. Дніпро"
 SCHEDULE_FILE = os.getenv("SCHEDULE_FILE", "schedule.json")
-TIMEZONE = "Europe/Kyiv"
 
-ALL_GROUPS = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", 
-              "4.1", "4.2", "5.1", "5.2", "6.1", "6.2"]
+# Еталонні адреси для кожної групи
+# Формат: "група": ("вулиця", "будинок")
+GROUP_ADDRESSES = {
+    "1.1": ("пров. Парковий", "1"),
+    "1.2": ("вул. Мохова", "1"),
+    "3.1": ("вул. Центральна", "1"),
+    "3.2": ("вул. Холодильна", "1"),
+    "5.1": ("пров. Морський", "1"),
+    "5.2": ("вул. Автодорожна", "1"),
+    # Додай після знаходження:
+    # "2.1": ("вул. ???", "1"),
+    # "2.2": ("вул. ???", "1"),
+    # "4.1": ("вул. ???", "1"),
+    # "4.2": ("вул. ???", "1"),
+    # "6.1": ("вул. ???", "1"),
+    # "6.2": ("вул. ???", "1"),
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ДОПОМІЖНІ ФУНКЦІЇ
+# API ФУНКЦІЇ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def setup_driver() -> webdriver.Chrome:
-    """Налаштовує Chrome WebDriver"""
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    return webdriver.Chrome(options=options)
+def fetch_street_data(street: str) -> Optional[Dict]:
+    """Запитує дані по вулиці"""
+    try:
+        data = {
+            "method": "getHomeNum",
+            "data[0][name]": "city",
+            "data[0][value]": CITY,
+            "data[1][name]": "street",
+            "data[1][value]": street,
+            "data[2][name]": "updateFact",
+            "data[2][value]": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        }
+        
+        r = requests.post(API_URL, data=data, timeout=15)
+        r.raise_for_status()
+        result = r.json()
+        
+        if result.get("result") and result.get("data"):
+            return result
+        return None
+        
+    except Exception as e:
+        print(f"  ❌ API Error: {e}")
+        return None
 
 
-def minutes_to_intervals(minutes: List[int]) -> List[str]:
+def parse_outages(api_data: Dict, target_group: str) -> List[Dict]:
     """
-    Конвертує список хвилин у інтервали
-    [0, 30, 60, 120, 150] → ['00:00-01:30', '02:00-03:00']
+    Парсить відключення для конкретної групи
+    Повертає список: [{"start": "HH:MM DD.MM.YYYY", "end": "...", "type": "..."}]
     """
-    if not minutes:
+    outages = []
+    
+    if not api_data or not api_data.get("data"):
+        return outages
+    
+    target_gpv = f"GPV{target_group}"
+    
+    for house, info in api_data["data"].items():
+        reasons = info.get("sub_type_reason", [])
+        
+        if target_gpv in reasons:
+            start = info.get("start_date", "")
+            end = info.get("end_date", "")
+            sub_type = info.get("sub_type", "")
+            
+            if start and end:
+                outages.append({
+                    "start": start,
+                    "end": end,
+                    "type": sub_type,
+                    "house": house
+                })
+    
+    return outages
+
+
+def outages_to_intervals(outages: List[Dict], target_date: str) -> List[str]:
+    """
+    Конвертує відключення в інтервали для конкретної дати
+    target_date: "DD.MM.YYYY"
+    Повертає: ["08:00-12:00", "16:00-20:00"]
+    """
+    intervals = []
+    
+    for outage in outages:
+        try:
+            # Парсимо дати: "HH:MM DD.MM.YYYY"
+            start_str = outage["start"]
+            end_str = outage["end"]
+            
+            start_time, start_date = start_str.split(" ")
+            end_time, end_date = end_str.split(" ")
+            
+            # Перевіряємо чи відключення стосується цільової дати
+            if start_date == target_date or end_date == target_date:
+                # Якщо початок раніше цільової дати — починаємо з 00:00
+                if start_date < target_date:
+                    start_time = "00:00"
+                # Якщо кінець пізніше цільової дати — закінчуємо о 24:00
+                if end_date > target_date:
+                    end_time = "24:00"
+                
+                intervals.append(f"{start_time}-{end_time}")
+                
+        except Exception as e:
+            print(f"  ⚠️ Parse error: {e}")
+    
+    return merge_intervals(intervals)
+
+
+def merge_intervals(intervals: List[str]) -> List[str]:
+    """Об'єднує перекриваючі інтервали"""
+    if not intervals:
         return []
     
-    minutes = sorted(set(minutes))
-    intervals = []
-    start = minutes[0]
-    prev = minutes[0]
-    
-    for m in minutes[1:]:
-        # Якщо розрив більше 30 хв — новий інтервал
-        if m - prev > 30:
-            end = prev + 30
-            intervals.append(f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}")
-            start = m
-        prev = m
-    
-    # Додаємо останній інтервал
-    end = min(prev + 30, 24 * 60)
-    intervals.append(f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}")
-    
-    return intervals
-
-
-def parse_emergency(driver) -> Optional[str]:
-    """Перевіряє чи є екстрене повідомлення на сайті"""
-    try:
-        # Шукаємо великий текст про екстрені відключення
-        elements = driver.find_elements(By.CSS_SELECTOR, "[class*='alert'], [class*='warning'], [class*='emergency'], [class*='banner'], h1, h2, h3, div[class*='message']")
-        for el in elements:
-            text = el.text.strip().upper()
-            if "ЕКСТРЕН" in text or "ГРАФІКИ НЕ ДІЮТЬ" in text or "НЕ ДІЮТЬ" in text:
-                return el.text.strip()
-        
-        # Також перевіряємо весь текст сторінки
-        body = driver.find_element(By.TAG_NAME, "body").text.upper()
-        if "ЕКСТРЕНІ ВІДКЛЮЧЕННЯ" in body and "ГРАФІКИ НЕ ДІЮТЬ" in body:
-            return "Екстрені відключення, графіки не діють"
-        
-        return None
-    except:
-        return None
-
-
-def parse_table(driver) -> Dict[str, List[str]]:
-    """Парсить таблицю графіку відключень"""
-    groups = {}
-    
-    try:
-        rows = driver.find_elements(By.CSS_SELECTOR, "[class*='_row_']")
-        print(f"    Знайдено {len(rows)} рядків")
-        
-        for row in rows:
-            try:
-                row_text = row.text.strip()
-                
-                # Визначаємо групу
-                group_id = None
-                for g in ALL_GROUPS:
-                    if row_text.startswith(g) or f"\n{g}\n" in f"\n{row_text}\n":
-                        group_id = g
-                        break
-                
-                if not group_id:
-                    continue
-                
-                # Парсимо комірки (перша — номер групи, пропускаємо)
-                cells = row.find_elements(By.CSS_SELECTOR, "[class*='_cell_']")
-                time_cells = cells[1:25] if len(cells) > 24 else cells[1:]
-                
-                outage_minutes = []
-                
-                for hour, cell in enumerate(time_cells):
-                    cell_html = cell.get_attribute("innerHTML") or ""
-                    
-                    # Шукаємо блоки з відключеннями
-                    if "_definite_" not in cell_html:
-                        continue
-                    
-                    # Парсимо кожен блок окремо
-                    parts = cell_html.split("_definite_")
-                    for part in parts[1:]:
-                        block = part[:part.find("</div>")] if "</div>" in part else part[:200]
-                        
-                        # Перевіряємо ширину блоку (50% = півгодини)
-                        is_half = "width: 50%" in block or "width:50%" in block
-                        
-                        if is_half:
-                            # Визначаємо яка половина
-                            if "left: 0%" in block or "left:0%" in block:
-                                outage_minutes.append(hour * 60)  # перші 30 хв
-                            elif "left: 50%" in block or "left:50%" in block:
-                                outage_minutes.append(hour * 60 + 30)  # другі 30 хв
-                        else:
-                            # Повна година
-                            outage_minutes.append(hour * 60)
-                            outage_minutes.append(hour * 60 + 30)
-                
-                if outage_minutes:
-                    groups[group_id] = minutes_to_intervals(outage_minutes)
-                    
-            except Exception as e:
-                print(f"    ⚠️ Помилка рядка: {e}")
-        
-    except Exception as e:
-        print(f"    ❌ Помилка парсингу таблиці: {e}")
-    
-    return groups
-
-
-def click_tab(driver, tab_name: str) -> bool:
-    """Клікає на вкладку (Сьогодні/Завтра)"""
-    try:
-        time.sleep(1)
-        
-        # Спочатку шукаємо по id
-        tab_id = "tomorrow" if "завтра" in tab_name.lower() else "today"
-        
+    # Конвертуємо в хвилини
+    mins = []
+    for iv in intervals:
         try:
-            tab = driver.find_element(By.CSS_SELECTOR, f"button[id*='{tab_id}']")
-            if tab.is_displayed():
-                tab.click()
-                print(f"    ✅ Натиснуто: {tab_name}")
-                time.sleep(2)
-                return True
+            start, end = iv.split("-")
+            sh, sm = map(int, start.split(":"))
+            eh, em = map(int, end.split(":"))
+            mins.append((sh * 60 + sm, eh * 60 + em))
         except:
-            pass
-        
-        # Шукаємо по класу segmented
-        try:
-            tabs = driver.find_elements(By.CSS_SELECTOR, "button[class*='segmented'], button[class*='_option_']")
-            for tab in tabs:
-                if tab_name.lower() in tab.text.lower():
-                    tab.click()
-                    print(f"    ✅ Натиснуто: {tab.text}")
-                    time.sleep(2)
-                    return True
-        except:
-            pass
-        
-        # Шукаємо будь-яку кнопку з текстом
-        buttons = driver.find_elements(By.TAG_NAME, "button")
-        for btn in buttons:
-            if tab_name.lower() in btn.text.lower():
-                btn.click()
-                print(f"    ✅ Натиснуто: {btn.text}")
-                time.sleep(2)
-                return True
-        
-        print(f"    ⚠️ Вкладка '{tab_name}' не знайдена")
-        return False
-        
-    except Exception as e:
-        print(f"    ❌ Помилка кліку: {e}")
-        return False
-
-
-def get_date(is_today: bool) -> str:
-    """Повертає дату у форматі DD.MM.YYYY"""
-    date = datetime.now()
-    if not is_today:
-        date += timedelta(days=1)
-    return date.strftime("%d.%m.%Y")
-
-
-def save_schedule(data: Dict[str, Any], filepath: str):
-    """Зберігає графік у JSON"""
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"💾 Збережено: {filepath}")
+            continue
+    
+    if not mins:
+        return []
+    
+    # Сортуємо і об'єднуємо
+    mins.sort()
+    merged = [mins[0]]
+    
+    for start, end in mins[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    
+    # Конвертуємо назад
+    result = []
+    for start, end in merged:
+        sh, sm = divmod(start, 60)
+        eh, em = divmod(end, 60)
+        result.append(f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}")
+    
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -228,119 +178,73 @@ def save_schedule(data: Dict[str, Any], filepath: str):
 
 def main():
     print("=" * 60)
-    print("🚀 YASNO Schedule Parser")
+    print("🚀 DTEK Schedule Parser")
     print("=" * 60)
     
-    # Завантажуємо попередній файл якщо є
-    old_data = None
-    if os.path.exists(SCHEDULE_FILE):
-        try:
-            with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
-                old_data = json.load(f)
-            print(f"📂 Завантажено попередній файл")
-        except:
-            pass
+    now = datetime.now()
+    today = now.strftime("%d.%m.%Y")
+    tomorrow = (now + timedelta(days=1)).strftime("%d.%m.%Y")
+    
+    print(f"\n📅 Сьогодні: {today}")
+    print(f"📅 Завтра: {tomorrow}")
+    print(f"📋 Груп: {len(GROUP_ADDRESSES)}\n")
     
     result = {
-        "timezone": TIMEZONE,
-        "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timezone": "Europe/Kyiv",
+        "updated": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "dtek-dnem.com.ua",
         "emergency": None,
-        "today": {"date": "", "groups": {}},
-        "tomorrow": {"date": "", "groups": {}}
+        "today": {"date": today, "groups": {}},
+        "tomorrow": {"date": tomorrow, "groups": {}}
     }
     
-    driver = None
-    
-    try:
-        driver = setup_driver()
+    # Збираємо дані по кожній групі
+    for group, (street, house) in GROUP_ADDRESSES.items():
+        print(f"📍 Група {group}: {street}...")
         
-        print(f"\n🌐 Завантаження {YASNO_URL}")
-        driver.get(YASNO_URL)
+        api_data = fetch_street_data(street)
         
-        # Чекаємо завантаження
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='_row_'], [class*='alert'], body"))
-        )
-        print("✅ Сторінка завантажена")
-        time.sleep(3)
+        if not api_data:
+            print(f"  ⚠️ Немає даних")
+            continue
         
-        # Перевіряємо екстрене повідомлення
-        emergency = parse_emergency(driver)
-        if emergency:
-            print(f"\n🚨 ЕКСТРЕНЕ ПОВІДОМЛЕННЯ: {emergency}")
-            result["emergency"] = emergency
+        # Перевіряємо екстрені відключення
+        update_ts = api_data.get("updateTimestamp", "")
+        
+        # Парсимо відключення
+        outages = parse_outages(api_data, group)
+        
+        if outages:
+            print(f"  ✅ Знайдено {len(outages)} відключень")
             
-            # Зберігаємо старі графіки якщо є екстрене повідомлення
-            if old_data:
-                result["today"] = old_data.get("today", result["today"])
-                result["tomorrow"] = old_data.get("tomorrow", result["tomorrow"])
-                print("📋 Графіки збережено з попереднього файлу")
+            # Конвертуємо в інтервали
+            today_intervals = outages_to_intervals(outages, today)
+            tomorrow_intervals = outages_to_intervals(outages, tomorrow)
             
-            save_schedule(result, SCHEDULE_FILE)
-            print("\n" + "=" * 60)
-            print("🚨 Екстрені відключення - графіки не оновлено")
-            print("=" * 60)
-            return
-        
-        # === Парсимо СЬОГОДНІ ===
-        print("\n📅 Парсинг: Сьогодні")
-        result["today"]["date"] = get_date(True)
-        result["today"]["groups"] = parse_table(driver)
-        print(f"    📊 Груп з відключеннями: {len(result['today']['groups'])}")
-        
-        # === Парсимо ЗАВТРА ===
-        print("\n📅 Парсинг: Завтра")
-        if click_tab(driver, "Завтра"):
-            time.sleep(2)
-            result["tomorrow"]["date"] = get_date(False)
-            result["tomorrow"]["groups"] = parse_table(driver)
-            print(f"    📊 Груп з відключеннями: {len(result['tomorrow']['groups'])}")
+            if today_intervals:
+                result["today"]["groups"][group] = today_intervals
+                print(f"     Сьогодні: {today_intervals}")
+            
+            if tomorrow_intervals:
+                result["tomorrow"]["groups"][group] = tomorrow_intervals
+                print(f"     Завтра: {tomorrow_intervals}")
         else:
-            print("    ⚠️ Графік на завтра недоступний")
-        
-        # Зберігаємо
-        save_schedule(result, SCHEDULE_FILE)
-        
-        # Підсумок
-        print("\n" + "=" * 60)
-        print("📊 ПІДСУМОК:")
-        print(f"   Сьогодні ({result['today']['date']}): {len(result['today']['groups'])} груп")
-        print(f"   Завтра ({result['tomorrow']['date']}): {len(result['tomorrow']['groups'])} груп")
-        
-        # Детальний вивід
-        if result["today"]["groups"]:
-            print("\n   Сьогодні:")
-            for grp, intervals in sorted(result["today"]["groups"].items()):
-                total = sum(
-                    (int(iv.split("-")[1].split(":")[0]) * 60 + int(iv.split("-")[1].split(":")[1])) -
-                    (int(iv.split("-")[0].split(":")[0]) * 60 + int(iv.split("-")[0].split(":")[1]))
-                    for iv in intervals
-                )
-                print(f"      {grp}: {len(intervals)} інт., {total // 60}год {total % 60:02d}хв")
-        
-        print("=" * 60)
-        
-    except Exception as e:
-        print(f"\n❌ ПОМИЛКА: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        # Зберігаємо HTML для дебагу
-        if driver:
-            try:
-                debug_file = "debug_page.html"
-                with open(debug_file, "w", encoding="utf-8") as f:
-                    f.write(driver.page_source)
-                print(f"📄 Debug HTML: {debug_file}")
-            except:
-                pass
-        
-        sys.exit(1)
-        
-    finally:
-        if driver:
-            driver.quit()
-            print("\n👋 Браузер закрито")
+            print(f"  ✅ Відключень немає")
+    
+    # Зберігаємо
+    with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    
+    print(f"\n💾 Збережено: {SCHEDULE_FILE}")
+    
+    # Підсумок
+    print("\n" + "=" * 60)
+    print("📊 ПІДСУМОК:")
+    today_count = len(result["today"]["groups"])
+    tomorrow_count = len(result["tomorrow"]["groups"])
+    print(f"  Сьогодні: {today_count} груп з відключеннями")
+    print(f"  Завтра: {tomorrow_count} груп з відключеннями")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
