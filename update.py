@@ -51,7 +51,7 @@ GROUP_ADDRESSES = {
 def setup_driver() -> webdriver.Chrome:
     """Налаштовує Chrome WebDriver"""
     options = Options()
-    #options.add_argument("--headless")
+    options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -97,17 +97,27 @@ def parse_table(driver, day: str = "today") -> List[bool]:
         # Клікаємо на потрібну вкладку (сьогодні/завтра)
         if day == "tomorrow":
             try:
-                tabs = driver.find_elements(By.CSS_SELECTOR, ".tabs-schedule button, .schedule-tabs button, [class*='tab']")
-                for tab in tabs:
-                    if "завтра" in tab.text.lower():
-                        tab.click()
-                        time.sleep(1)
-                        break
+                driver.execute_script("""
+                    var tabs = document.querySelectorAll('[class*="tab"], button');
+                    for (var t of tabs) {
+                        if (t.textContent.toLowerCase().includes('завтра')) {
+                            t.click();
+                            break;
+                        }
+                    }
+                """)
+                time.sleep(1)
             except:
                 pass
         
-        # Шукаємо таблицю
-        table = driver.find_element(By.CSS_SELECTOR, "table")
+        # Беремо ПЕРШУ таблицю (Table 0) - це графік на сьогодні/завтра
+        tables = driver.find_elements(By.TAG_NAME, "table")
+        
+        if not tables:
+            print("    ⚠️ No tables found")
+            return slots
+        
+        table = tables[0]  # Перша таблиця
         
         # Шукаємо tbody tr з комірками
         rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
@@ -115,12 +125,11 @@ def parse_table(driver, day: str = "today") -> List[bool]:
         for row in rows:
             cells = row.find_elements(By.TAG_NAME, "td")
             
-            # Пропускаємо перші 1-2 комірки (заголовок рядка)
+            # Фільтруємо тільки комірки з класами cell-*
             hour_cells = [c for c in cells if c.get_attribute("class") and "cell-" in c.get_attribute("class")]
             
             if not hour_cells:
-                # Якщо немає класів — беремо всі td крім перших
-                hour_cells = cells[1:] if len(cells) > 24 else cells
+                continue
             
             for hour, cell in enumerate(hour_cells[:24]):
                 cell_class = cell.get_attribute("class") or ""
@@ -128,7 +137,7 @@ def parse_table(driver, day: str = "today") -> List[bool]:
                 first_half = False
                 second_half = False
                 
-                if "cell-scheduled" in cell_class:
+                if "cell-scheduled" in cell_class and "cell-scheduled-maybe" not in cell_class:
                     first_half, second_half = True, True
                 elif "cell-first-half" in cell_class:
                     first_half = True
@@ -198,10 +207,29 @@ def enter_address(driver, street: str) -> bool:
             pass
         time.sleep(2)
         
-        # Перевіряємо чи з'явилась таблиця
+        # Вибираємо номер будинку (перший доступний)
+        try:
+            driver.execute_script("""
+                var houseSelect = document.getElementById('house') || document.querySelector('select[name="house"]');
+                if (houseSelect) {
+                    var options = houseSelect.querySelectorAll('option');
+                    for (var i = 0; i < options.length; i++) {
+                        if (options[i].value && options[i].value !== '') {
+                            houseSelect.value = options[i].value;
+                            houseSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                            break;
+                        }
+                    }
+                }
+            """)
+        except:
+            pass
+        time.sleep(2)
+        
+        # Перевіряємо чи з'явилась таблиця з графіком
         try:
             WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody td[class*='cell-']"))
+                EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody td.cell-scheduled, table tbody td.cell-first-half, table tbody td.cell-second-half, table tbody td.cell-non-scheduled"))
             )
             return True
         except:
@@ -213,7 +241,7 @@ def enter_address(driver, street: str) -> bool:
                 """)
                 time.sleep(2)
                 WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody td[class*='cell-']"))
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody td.cell-scheduled, table tbody td.cell-first-half, table tbody td.cell-second-half, table tbody td.cell-non-scheduled"))
                 )
                 return True
             except:
