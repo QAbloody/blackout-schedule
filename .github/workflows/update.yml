@@ -21,23 +21,23 @@ jobs:
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
-      
+        
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+        
       - name: 🌐 Set up Chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
-      
+        
       - name: 📦 Install dependencies
         run: pip install selenium
-      
+        
       - name: 🔍 Run update script
         run: python update.py
-      
+        
       - name: 📤 Upload debug artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -45,15 +45,15 @@ jobs:
           name: debug-${{ github.run_number }}
           path: |
             debug_page.html
+            debug_page.png
           retention-days: 3
           if-no-files-found: ignore
-      
+        
       - name: 💾 Commit and push
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Спочатку pull
           git pull --rebase origin main || true
           
           git add schedule.json
