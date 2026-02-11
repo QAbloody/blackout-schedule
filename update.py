@@ -78,84 +78,113 @@ def fill_form_and_get_schedule(driver, street):
             var cityInput = form.querySelector('#city');
             var streetInput = form.querySelector('#street');
             
-            // Вводимо місто
+            // Симулюємо введення міста посимвольно
             cityInput.focus();
-            cityInput.value = '{CITY}';
-            cityInput.dispatchEvent(new Event('input', {{bubbles: true}}));
+            var cityText = '{CITY}';
+            var cityIndex = 0;
             
-            setTimeout(() => {{
-                // Клікаємо на автодоповнення міста
-                var cityItems = document.querySelectorAll('#cityautocomplete-list div');
-                if (cityItems.length > 0) cityItems[0].click();
-                
-                setTimeout(() => {{
-                    // Вводимо вулицю
-                    streetInput.disabled = false;
-                    streetInput.focus();
-                    streetInput.value = '{street}';
-                    streetInput.dispatchEvent(new Event('input', {{bubbles: true}}));
-                    
+            function typeCity() {{
+                if (cityIndex < cityText.length) {{
+                    cityInput.value += cityText[cityIndex];
+                    cityInput.dispatchEvent(new Event('input', {{bubbles: true}}));
+                    cityInput.dispatchEvent(new KeyboardEvent('keyup', {{key: cityText[cityIndex], bubbles: true}}));
+                    cityIndex++;
+                    setTimeout(typeCity, 50);
+                }} else {{
+                    // Після введення міста - чекаємо і клікаємо на автодоповнення
                     setTimeout(() => {{
-                        // Клікаємо на автодоповнення вулиці
-                        var streetItems = document.querySelectorAll('#streetautocomplete-list div');
-                        if (streetItems.length > 0) streetItems[0].click();
+                        var cityItems = document.querySelectorAll('#cityautocomplete-list div, .autocomplete-items div');
+                        console.log('City autocomplete items:', cityItems.length);
+                        if (cityItems.length > 0) {{
+                            cityItems[0].click();
+                        }}
                         
                         setTimeout(() => {{
-                            // Вводимо будинок
-                            var houseInput = form.querySelector('#house_num');
+                            // Вводимо вулицю
+                            streetInput.disabled = false;
+                            streetInput.focus();
+                            var streetText = '{street}';
+                            var streetIndex = 0;
                             
-                            var finishAndGetSchedule = function() {{
-                                // Збираємо результат з таблиці
-                                var tables = document.querySelectorAll('table');
-                                var result = {{tables: tables.length, slots: [], debug: ''}};
-                                
-                                // Шукаємо правильну таблицю (без head-time і без днів тижня)
-                                for (var t of tables) {{
-                                    var html = t.outerHTML;
-                                    if (!html.includes('head-time') && !html.includes('Понеділок')) {{
-                                        result.debug = 'Found schedule table';
-                                        var cells = t.querySelectorAll('tbody td[class*="cell-"]');
-                                        for (var i = 0; i < cells.length && i < 24; i++) {{
-                                            var cls = cells[i].className;
-                                            var first = cls.includes('cell-scheduled') && !cls.includes('maybe');
-                                            var second = first;
-                                            if (cls.includes('cell-first-half')) {{ first = true; second = false; }}
-                                            if (cls.includes('cell-second-half')) {{ first = false; second = true; }}
-                                            result.slots.push(first);
-                                            result.slots.push(second);
+                            function typeStreet() {{
+                                if (streetIndex < streetText.length) {{
+                                    streetInput.value += streetText[streetIndex];
+                                    streetInput.dispatchEvent(new Event('input', {{bubbles: true}}));
+                                    streetInput.dispatchEvent(new KeyboardEvent('keyup', {{key: streetText[streetIndex], bubbles: true}}));
+                                    streetIndex++;
+                                    setTimeout(typeStreet, 50);
+                                }} else {{
+                                    setTimeout(() => {{
+                                        var streetItems = document.querySelectorAll('#streetautocomplete-list div, .autocomplete-items div');
+                                        console.log('Street autocomplete items:', streetItems.length);
+                                        if (streetItems.length > 0) {{
+                                            streetItems[0].click();
                                         }}
-                                        break;
-                                    }}
+                                        
+                                        setTimeout(() => {{
+                                            // Вводимо будинок
+                                            var houseInput = form.querySelector('#house_num');
+                                            if (houseInput) {{
+                                                houseInput.disabled = false;
+                                                houseInput.focus();
+                                                houseInput.value = '1';
+                                                houseInput.dispatchEvent(new Event('input', {{bubbles: true}}));
+                                                
+                                                setTimeout(() => {{
+                                                    var houseItems = document.querySelectorAll('#house_numautocomplete-list div, .autocomplete-items div');
+                                                    if (houseItems.length > 0) houseItems[0].click();
+                                                    
+                                                    setTimeout(finishAndGetSchedule, 3000);
+                                                }}, 1500);
+                                            }} else {{
+                                                setTimeout(finishAndGetSchedule, 3000);
+                                            }}
+                                        }}, 2000);
+                                    }}, 1500);
                                 }}
-                                
-                                if (result.slots.length === 0) {{
-                                    result.debug = 'No schedule table found, tables: ' + tables.length;
-                                }}
-                                
-                                resolve(result);
-                            }};
-                            
-                            if (houseInput) {{
-                                houseInput.disabled = false;
-                                houseInput.focus();
-                                houseInput.value = '1';
-                                houseInput.dispatchEvent(new Event('input', {{bubbles: true}}));
-                                
-                                setTimeout(() => {{
-                                    var houseItems = document.querySelectorAll('#house_numautocomplete-list div');
-                                    if (houseItems.length > 0) houseItems[0].click();
-                                    
-                                    setTimeout(finishAndGetSchedule, 2000);
-                                }}, 1000);
-                            }} else {{
-                                // Будинок не потрібен - спробуємо отримати графік без нього
-                                setTimeout(finishAndGetSchedule, 2000);
                             }}
-                        }}, 1500);
-                    }}, 1000);
-                }}, 1500);
-            }}, 1000);
-        }}, 1000);
+                            typeStreet();
+                        }}, 2000);
+                    }}, 1500);
+                }}
+            }}
+            
+            var finishAndGetSchedule = function() {{
+                var tables = document.querySelectorAll('table');
+                var result = {{tables: tables.length, slots: [], debug: ''}};
+                
+                for (var t of tables) {{
+                    var html = t.outerHTML;
+                    if (!html.includes('head-time') && !html.includes('Понеділок')) {{
+                        result.debug = 'Found schedule table';
+                        var cells = t.querySelectorAll('tbody td[class*="cell-"]');
+                        for (var i = 0; i < cells.length && i < 24; i++) {{
+                            var cls = cells[i].className;
+                            var first = cls.includes('cell-scheduled') && !cls.includes('maybe');
+                            var second = first;
+                            if (cls.includes('cell-first-half')) {{ first = true; second = false; }}
+                            if (cls.includes('cell-second-half')) {{ first = false; second = true; }}
+                            result.slots.push(first);
+                            result.slots.push(second);
+                        }}
+                        break;
+                    }}
+                }}
+                
+                if (result.slots.length === 0) {{
+                    result.debug = 'No schedule table, tables: ' + tables.length;
+                    // Додаємо інфо про форму
+                    var city = document.querySelector('#city');
+                    var street = document.querySelector('#street');
+                    result.debug += ', city=' + (city ? city.value : 'null');
+                    result.debug += ', street=' + (street ? street.value : 'null');
+                }}
+                
+                resolve(result);
+            }};
+            
+            typeCity();
+        }}, 1500);
     }});
     """
     
