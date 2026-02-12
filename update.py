@@ -60,20 +60,52 @@ def slots_to_intervals(slots):
 
 
 def close_popup(driver):
-    """Закриває popup"""
+    """Закриває popup і повертає текст повідомлення"""
+    message = None
+    is_emergency = False
+    
     try:
-        driver.execute_script("""
-            var closeBtn = document.querySelector('.modal__close, .m-attention__close');
-            if (closeBtn) closeBtn.click();
-        """)
+        # Читаємо текст popup
+        popup = driver.find_element(By.CSS_SELECTOR, ".modal__container, .m-attention__container, [class*='modal'][class*='container']")
+        if popup:
+            message = popup.text.strip()
+            
+            # Перевіряємо на екстрені відключення
+            emergency_keywords = [
+                "екстрен",
+                "аварій",
+                "терміново",
+                "негайно",
+                "надзвичайн",
+                "без графік",
+                "цілодобов",
+                "00:00 до 24:00",
+                "весь день",
+            ]
+            
+            message_lower = message.lower()
+            for keyword in emergency_keywords:
+                if keyword in message_lower:
+                    is_emergency = True
+                    break
+        
+        # Закриваємо popup
+        close_btn = driver.find_element(By.CSS_SELECTOR, ".modal__close, .m-attention__close")
+        if close_btn:
+            close_btn.click()
         time.sleep(1)
+        
     except:
         pass
+    
+    return message, is_emergency
 
 
 def fill_form(driver, street):
-    """Заповнює форму через ActionChains"""
+    """Заповнює форму через ActionChains. Повертає (success, popup_message, is_emergency)"""
     actions = ActionChains(driver)
+    popup_message = None
+    is_emergency = False
     
     try:
         # Чекаємо форму
@@ -81,8 +113,8 @@ def fill_form(driver, street):
             EC.presence_of_element_located((By.CSS_SELECTOR, ".discon-schedule-form #city"))
         )
         
-        # Закриваємо popup
-        close_popup(driver)
+        # Закриваємо popup і читаємо повідомлення
+        popup_message, is_emergency = close_popup(driver)
         time.sleep(2)
         
         # === МІСТО ===
@@ -101,7 +133,6 @@ def fill_form(driver, street):
         time.sleep(2)
         
         city_value = city_input.get_attribute("value")
-        print(f"    🔍 City value: {city_value}")
         
         # Клікаємо на перший елемент автодоповнення
         try:
@@ -109,11 +140,8 @@ def fill_form(driver, street):
                 EC.presence_of_element_located((By.CSS_SELECTOR, "#cityautocomplete-list div, [class*='autocomplete'] div"))
             )
             autocomplete.click()
-            print(f"    🔍 City autocomplete clicked")
         except:
-            # Якщо немає автодоповнення - натискаємо Enter
             city_input.send_keys(Keys.RETURN)
-            print(f"    🔍 City: pressed Enter")
         time.sleep(2)
         
         # === ВУЛИЦЯ ===
@@ -131,7 +159,6 @@ def fill_form(driver, street):
         time.sleep(2)
         
         street_value = street_input.get_attribute("value")
-        print(f"    🔍 Street value: {street_value}")
         
         # Клікаємо на автодоповнення
         try:
@@ -139,10 +166,8 @@ def fill_form(driver, street):
                 EC.presence_of_element_located((By.CSS_SELECTOR, "#streetautocomplete-list div, [class*='autocomplete'] div"))
             )
             autocomplete.click()
-            print(f"    🔍 Street autocomplete clicked")
         except:
             street_input.send_keys(Keys.RETURN)
-            print(f"    🔍 Street: pressed Enter")
         time.sleep(2)
         
         # === БУДИНОК ===
@@ -160,7 +185,6 @@ def fill_form(driver, street):
             time.sleep(1.5)
             
             house_value = house_input.get_attribute("value")
-            print(f"    🔍 House value: {house_value}")
             
             # Клікаємо на автодоповнення
             try:
@@ -171,14 +195,14 @@ def fill_form(driver, street):
             except:
                 house_input.send_keys(Keys.RETURN)
         except Exception as e:
-            print(f"    🔍 House error: {e}")
+            pass
         
         time.sleep(3)
-        return True
+        return True, popup_message, is_emergency
         
     except Exception as e:
         print(f"    ❌ Form error: {e}")
-        return False
+        return False, popup_message, is_emergency
 
 
 def parse_schedule(driver):
@@ -187,14 +211,12 @@ def parse_schedule(driver):
     
     try:
         tables = driver.find_elements(By.TAG_NAME, "table")
-        print(f"    🔍 Found {len(tables)} tables")
         
         for t in tables:
             html = t.get_attribute("outerHTML")
             # Шукаємо таблицю БЕЗ head-time (це графік на сьогодні)
             if "head-time" not in html and "Понеділок" not in html:
                 cells = t.find_elements(By.CSS_SELECTOR, "tbody td[class*='cell-']")
-                print(f"    🔍 Schedule table found, cells: {len(cells)}")
                 
                 for i, cell in enumerate(cells[:24]):
                     cls = cell.get_attribute("class")
@@ -208,7 +230,7 @@ def parse_schedule(driver):
                     slots[i * 2 + 1] = second
                 break
     except Exception as e:
-        print(f"    ❌ Parse error: {e}")
+        pass
     
     return slots
 
@@ -239,13 +261,27 @@ def main():
     try:
         driver = setup_driver()
         
+        popup_message = None
+        is_emergency = False
+        
         for group, street in GROUP_ADDRESSES.items():
             print(f"📍 Група {group}: {street}...")
             
             driver.get(DTEK_URL)
             time.sleep(3)
             
-            if fill_form(driver, street):
+            success, msg, emergency = fill_form(driver, street)
+            
+            # Зберігаємо popup повідомлення (тільки перший раз)
+            if msg and not popup_message:
+                popup_message = msg
+                is_emergency = emergency
+                print(f"    📢 Popup: {msg[:100]}..." if len(msg) > 100 else f"    📢 Popup: {msg}")
+                if is_emergency:
+                    print(f"    ⚠️ ЕКСТРЕНЕ ПОВІДОМЛЕННЯ!")
+            
+            if success:
+            if success:
                 slots = parse_schedule(driver)
                 
                 if any(slots):
@@ -266,6 +302,12 @@ def main():
                         f.write(driver.page_source)
                 except:
                     pass
+        
+        # Зберігаємо popup повідомлення в результат
+        if popup_message:
+            result["announcement"] = popup_message
+            if is_emergency:
+                result["emergency"] = popup_message
         
         with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
