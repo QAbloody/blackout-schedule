@@ -1,10 +1,10 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-02-11 23:37:02",
+  "updated": "2026-02-12 02:28:53",
   "source": "dtek-dnem.com.ua",
   "emergency": null,
   "today": {
-    "date": "11.02.2026",
+    "date": "12.02.2026",
     "groups": {
       "1.1": [
         "00:00-02:00",
@@ -39,7 +39,7 @@
     }
   },
   "tomorrow": {
-    "date": "12.02.2026",
+    "date": "13.02.2026",
     "groups": {}
   }
 }
