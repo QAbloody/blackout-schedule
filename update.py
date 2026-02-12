@@ -281,7 +281,6 @@ def main():
                     print(f"    ⚠️ ЕКСТРЕНЕ ПОВІДОМЛЕННЯ!")
             
             if success:
-            if success:
                 slots = parse_schedule(driver)
                 
                 if any(slots):
