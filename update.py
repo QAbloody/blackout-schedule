@@ -68,7 +68,31 @@ def close_popup(driver):
         # Читаємо текст popup
         popup = driver.find_element(By.CSS_SELECTOR, ".modal__container, .m-attention__container, [class*='modal'][class*='container']")
         if popup:
-            message = popup.text.strip()
+            full_text = popup.text.strip()
+            
+            # Беремо тільки перший абзац або перші 2-3 речення
+            lines = [l.strip() for l in full_text.split('\n') if l.strip()]
+            
+            # Пропускаємо заголовок типу "Шановні клієнти!"
+            start_idx = 0
+            skip_phrases = ["шановні", "увага", "dear", "дорогі"]
+            if lines and any(p in lines[0].lower() for p in skip_phrases):
+                start_idx = 1
+            
+            # Беремо наступні 1-2 рядки (зазвичай це основна інформація)
+            important_lines = lines[start_idx:start_idx + 2]
+            message = " ".join(important_lines)
+            
+            # Обрізаємо якщо занадто довге (макс 200 символів)
+            if len(message) > 200:
+                # Знаходимо кінець речення
+                for end in ['. ', '! ', '? ']:
+                    idx = message[:200].rfind(end)
+                    if idx > 50:
+                        message = message[:idx + 1]
+                        break
+                else:
+                    message = message[:197] + "..."
             
             # Перевіряємо на екстрені відключення
             emergency_keywords = [
@@ -83,7 +107,7 @@ def close_popup(driver):
                 "весь день",
             ]
             
-            message_lower = message.lower()
+            message_lower = full_text.lower()
             for keyword in emergency_keywords:
                 if keyword in message_lower:
                     is_emergency = True
@@ -276,9 +300,9 @@ def main():
             if msg and not popup_message:
                 popup_message = msg
                 is_emergency = emergency
-                print(f"    📢 Popup: {msg[:100]}..." if len(msg) > 100 else f"    📢 Popup: {msg}")
+                print(f"    📢 {msg}")
                 if is_emergency:
-                    print(f"    ⚠️ ЕКСТРЕНЕ ПОВІДОМЛЕННЯ!")
+                    print(f"    ⚠️ ЕКСТРЕНЕ!")
             
             if success:
                 slots = parse_schedule(driver)
