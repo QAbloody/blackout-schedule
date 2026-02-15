@@ -234,44 +234,33 @@ def parse_schedule(driver, day="today"):
     slots = [False] * 48
     
     try:
-        # Якщо потрібен завтрашній день - клікаємо на таб
+        # Якщо потрібен завтрашній день - клікаємо на другу таблицю
         if day == "tomorrow":
             try:
-                # Шукаємо таб "Завтра"
-                tomorrow_tab = driver.find_element(By.XPATH, "//button[contains(text(), 'Завтра')] | //a[contains(text(), 'Завтра')] | //div[contains(@class, 'tab') and contains(text(), 'Завтра')]")
-                tomorrow_tab.click()
-                time.sleep(2)
+                # Знаходимо всі таби графіків
+                tabs = driver.find_elements(By.CSS_SELECTOR, ".discon-fact-table")
+                if len(tabs) >= 2:
+                    # Клікаємо на другий (завтра)
+                    driver.execute_script("arguments[0].click();", tabs[1])
+                    time.sleep(1.5)
             except:
-                # Спробуємо інший селектор
-                try:
-                    tabs = driver.find_elements(By.CSS_SELECTOR, ".tabs button, .tabs a, [class*='tab']")
-                    for tab in tabs:
-                        if "завтра" in tab.text.lower():
-                            tab.click()
-                            time.sleep(2)
-                            break
-                except:
-                    pass
+                pass
         
-        tables = driver.find_elements(By.TAG_NAME, "table")
+        # Знаходимо активну таблицю
+        active_table = driver.find_element(By.CSS_SELECTOR, ".discon-fact-table.active table")
+        cells = active_table.find_elements(By.CSS_SELECTOR, "tbody td[class*='cell-']")
         
-        for t in tables:
-            html = t.get_attribute("outerHTML")
-            # Шукаємо таблицю БЕЗ head-time (це графік на сьогодні/завтра)
-            if "head-time" not in html and "Понеділок" not in html:
-                cells = t.find_elements(By.CSS_SELECTOR, "tbody td[class*='cell-']")
+        for i, cell in enumerate(cells[:24]):
+            cls = cell.get_attribute("class")
+            first = "cell-scheduled" in cls and "maybe" not in cls
+            second = first
+            if "cell-first-half" in cls:
+                first, second = True, False
+            if "cell-second-half" in cls:
+                first, second = False, True
+            slots[i * 2] = first
+            slots[i * 2 + 1] = second
                 
-                for i, cell in enumerate(cells[:24]):
-                    cls = cell.get_attribute("class")
-                    first = "cell-scheduled" in cls and "maybe" not in cls
-                    second = first
-                    if "cell-first-half" in cls:
-                        first, second = True, False
-                    if "cell-second-half" in cls:
-                        first, second = False, True
-                    slots[i * 2] = first
-                    slots[i * 2 + 1] = second
-                break
     except Exception as e:
         pass
     
