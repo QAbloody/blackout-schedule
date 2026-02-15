@@ -239,12 +239,23 @@ def parse_schedule(driver, day="today"):
             try:
                 # Знаходимо всі таби графіків
                 tabs = driver.find_elements(By.CSS_SELECTOR, ".discon-fact-table")
+                print(f"        [DEBUG] Found {len(tabs)} tabs")
                 if len(tabs) >= 2:
+                    # Перевіряємо який зараз активний
+                    for i, tab in enumerate(tabs):
+                        is_active = "active" in tab.get_attribute("class")
+                        print(f"        [DEBUG] Tab {i}: active={is_active}")
+                    
                     # Клікаємо на другий (завтра)
                     driver.execute_script("arguments[0].click();", tabs[1])
                     time.sleep(1.5)
-            except:
-                pass
+                    
+                    # Перевіряємо чи змінився
+                    for i, tab in enumerate(tabs):
+                        is_active = "active" in tab.get_attribute("class")
+                        print(f"        [DEBUG] After click - Tab {i}: active={is_active}")
+            except Exception as e:
+                print(f"        [DEBUG] Tab error: {e}")
         
         # Знаходимо активну таблицю
         active_table = driver.find_element(By.CSS_SELECTOR, ".discon-fact-table.active table")
@@ -262,7 +273,7 @@ def parse_schedule(driver, day="today"):
             slots[i * 2 + 1] = second
                 
     except Exception as e:
-        pass
+        print(f"        [DEBUG] Parse error: {e}")
     
     return slots
 
