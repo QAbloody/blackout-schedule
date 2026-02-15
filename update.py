@@ -229,16 +229,35 @@ def fill_form(driver, street):
         return False, popup_message, is_emergency
 
 
-def parse_schedule(driver):
-    """Парсить таблицю з графіком"""
+def parse_schedule(driver, day="today"):
+    """Парсить таблицю з графіком. day = 'today' або 'tomorrow'"""
     slots = [False] * 48
     
     try:
+        # Якщо потрібен завтрашній день - клікаємо на таб
+        if day == "tomorrow":
+            try:
+                # Шукаємо таб "Завтра"
+                tomorrow_tab = driver.find_element(By.XPATH, "//button[contains(text(), 'Завтра')] | //a[contains(text(), 'Завтра')] | //div[contains(@class, 'tab') and contains(text(), 'Завтра')]")
+                tomorrow_tab.click()
+                time.sleep(2)
+            except:
+                # Спробуємо інший селектор
+                try:
+                    tabs = driver.find_elements(By.CSS_SELECTOR, ".tabs button, .tabs a, [class*='tab']")
+                    for tab in tabs:
+                        if "завтра" in tab.text.lower():
+                            tab.click()
+                            time.sleep(2)
+                            break
+                except:
+                    pass
+        
         tables = driver.find_elements(By.TAG_NAME, "table")
         
         for t in tables:
             html = t.get_attribute("outerHTML")
-            # Шукаємо таблицю БЕЗ head-time (це графік на сьогодні)
+            # Шукаємо таблицю БЕЗ head-time (це графік на сьогодні/завтра)
             if "head-time" not in html and "Понеділок" not in html:
                 cells = t.find_elements(By.CSS_SELECTOR, "tbody td[class*='cell-']")
                 
@@ -305,15 +324,27 @@ def main():
                     print(f"    ⚠️ ЕКСТРЕНЕ!")
             
             if success:
-                slots = parse_schedule(driver)
+                # Парсимо сьогодні
+                slots_today = parse_schedule(driver, "today")
                 
-                if any(slots):
-                    intervals = slots_to_intervals(slots)
+                if any(slots_today):
+                    intervals = slots_to_intervals(slots_today)
                     result["today"]["groups"][group] = intervals
-                    total = sum(slots) * 30
-                    print(f"    ✅ {intervals} ({total // 60}год {total % 60:02d}хв)")
+                    total = sum(slots_today) * 30
+                    print(f"    📊 Сьогодні: {intervals} ({total // 60}год {total % 60:02d}хв)")
                 else:
-                    print(f"    ✅ Відключень немає")
+                    print(f"    📊 Сьогодні: відключень немає")
+                
+                # Парсимо завтра
+                slots_tomorrow = parse_schedule(driver, "tomorrow")
+                
+                if any(slots_tomorrow):
+                    intervals = slots_to_intervals(slots_tomorrow)
+                    result["tomorrow"]["groups"][group] = intervals
+                    total = sum(slots_tomorrow) * 30
+                    print(f"    📅 Завтра: {intervals} ({total // 60}год {total % 60:02d}хв)")
+                else:
+                    print(f"    📅 Завтра: відключень немає")
             else:
                 print(f"    ⚠️ Form failed")
             
@@ -336,7 +367,8 @@ def main():
             json.dump(result, f, ensure_ascii=False, indent=2)
         
         print(f"\n💾 Збережено: {SCHEDULE_FILE}")
-        print(f"📊 Груп з графіком: {len(result['today']['groups'])}")
+        print(f"📊 Сьогодні: {len(result['today']['groups'])} груп")
+        print(f"📅 Завтра: {len(result['tomorrow']['groups'])} груп")
         
     except Exception as e:
         print(f"\n❌ Error: {e}")
