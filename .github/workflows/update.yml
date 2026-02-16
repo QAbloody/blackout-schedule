@@ -71,7 +71,7 @@ jobs:
           git stash pop || true
           
           # Комітимо
-          git add schedule.json
+          git add schedule.json history.json
           
           if git diff --staged --quiet; then
             echo "✅ No changes"
