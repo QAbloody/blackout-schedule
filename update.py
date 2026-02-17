@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-DTEK Schedule Parser - Using Selenium ActionChains
+DTEK + YASNO Schedule Parser
+- DTEK для груп 1.1, 1.2, 3.1, 3.2, 5.1, 5.2
+- YASNO API для груп 2.1, 2.2, 4.1, 4.2, 6.1, 6.2
 """
 
 import os
 import json
 import time
+import requests
 from datetime import datetime, timedelta
 
 from selenium import webdriver
@@ -17,10 +20,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 DTEK_URL = "https://www.dtek-dnem.com.ua/ua/shutdowns"
+YASNO_API = "https://api.yasno.com.ua/api/v1/pages/home/schedule-turn-off-electricity"
 CITY = "м. Дніпро"
 SCHEDULE_FILE = os.getenv("SCHEDULE_FILE", "schedule.json")
 
-GROUP_ADDRESSES = {
+# DTEK групи (парсимо через Selenium)
+DTEK_GROUPS = {
     "1.1": "пров. Парковий",
     "1.2": "вул. Мохова",
     "3.1": "вул. Центральна",
@@ -28,6 +33,132 @@ GROUP_ADDRESSES = {
     "5.1": "пров. Морський",
     "5.2": "вул. Автодорожна",
 }
+
+# YASNO групи (парсимо через API)
+YASNO_GROUPS = ["2.1", "2.2", "4.1", "4.2", "6.1", "6.2"]
+
+
+def fetch_yasno_schedule():
+    """Отримує графіки з YASNO API для груп 2.x, 4.x, 6.x"""
+    result = {"today": {}, "tomorrow": {}}
+    
+    try:
+        print("\n📡 Завантаження YASNO API...")
+        r = requests.get(YASNO_API, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        
+        # Знаходимо компонент з графіками
+        components = data.get("components", [])
+        schedule_data = None
+        
+        for comp in components:
+            if comp.get("template_name") == "electricity-outages-daily-schedule":
+                schedule_data = comp.get("schedule", {}).get("dnipro", {})
+                break
+        
+        if not schedule_data:
+            print("   ⚠️ Графіки YASNO не знайдено")
+            return result
+        
+        # Визначаємо день тижня (0=пн, 6=нд)
+        today_weekday = datetime.now().weekday()
+        tomorrow_weekday = (today_weekday + 1) % 7
+        
+        for group in YASNO_GROUPS:
+            group_key = f"group_{group}"
+            group_data = schedule_data.get(group_key, [])
+            
+            if not group_data or len(group_data) < 7:
+                continue
+            
+            # Парсимо сьогодні
+            today_slots = group_data[today_weekday]
+            today_intervals = yasno_slots_to_intervals(today_slots)
+            if today_intervals:
+                result["today"][group] = today_intervals
+            
+            # Парсимо завтра
+            tomorrow_slots = group_data[tomorrow_weekday]
+            tomorrow_intervals = yasno_slots_to_intervals(tomorrow_slots)
+            if tomorrow_intervals:
+                result["tomorrow"][group] = tomorrow_intervals
+            
+            total_today = sum_intervals(today_intervals)
+            total_tomorrow = sum_intervals(tomorrow_intervals)
+            print(f"   📍 Група {group}: сьогодні {total_today//60}год {total_today%60:02d}хв, завтра {total_tomorrow//60}год {total_tomorrow%60:02d}хв")
+        
+        print(f"   ✅ YASNO: {len(result['today'])} груп")
+        
+    except Exception as e:
+        print(f"   ❌ YASNO API error: {e}")
+    
+    return result
+
+
+def yasno_slots_to_intervals(slots):
+    """Конвертує слоти YASNO в інтервали"""
+    if not slots:
+        return []
+    
+    intervals = []
+    for slot in slots:
+        start = slot.get("start", 0)
+        end = slot.get("end", 0)
+        slot_type = slot.get("type", "")
+        
+        # Беремо тільки DEFINITE_OUTAGE або POSSIBLE_OUTAGE
+        if "OUTAGE" in slot_type:
+            # Конвертуємо години в формат HH:MM
+            sh = int(start)
+            sm = int((start - sh) * 60)
+            eh = int(end)
+            em = int((end - eh) * 60)
+            
+            if eh == 24:
+                eh = 24
+                em = 0
+            
+            intervals.append(f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}")
+    
+    # Об'єднуємо суміжні інтервали
+    return merge_intervals(intervals)
+
+
+def merge_intervals(intervals):
+    """Об'єднує суміжні інтервали"""
+    if not intervals:
+        return []
+    
+    # Сортуємо по початку
+    sorted_ivs = sorted(intervals)
+    merged = [sorted_ivs[0]]
+    
+    for iv in sorted_ivs[1:]:
+        last_end = merged[-1].split("-")[1]
+        curr_start = iv.split("-")[0]
+        
+        if last_end == curr_start:
+            # Об'єднуємо
+            merged[-1] = merged[-1].split("-")[0] + "-" + iv.split("-")[1]
+        else:
+            merged.append(iv)
+    
+    return merged
+
+
+def sum_intervals(intervals):
+    """Сумує тривалість інтервалів в хвилинах"""
+    total = 0
+    for iv in intervals:
+        parts = iv.split("-")
+        if len(parts) == 2:
+            sh, sm = map(int, parts[0].split(":"))
+            eh, em = map(int, parts[1].split(":"))
+            start = sh * 60 + sm
+            end = eh * 60 + em if eh != 24 else 24 * 60
+            total += end - start
+    return total
 
 
 def setup_driver():
@@ -325,7 +456,7 @@ def parse_schedule(driver, day="today"):
 
 def main():
     print("=" * 60)
-    print("🚀 DTEK Schedule Parser")
+    print("🚀 DTEK + YASNO Schedule Parser")
     print("=" * 60)
     
     now = datetime.now()
@@ -333,16 +464,22 @@ def main():
     tomorrow = (now + timedelta(days=1)).strftime("%d.%m.%Y")
     
     print(f"\n📅 Сьогодні: {today}")
-    print(f"📋 Груп: {len(GROUP_ADDRESSES)}\n")
+    print(f"📋 DTEK груп: {len(DTEK_GROUPS)}")
+    print(f"📋 YASNO груп: {len(YASNO_GROUPS)}\n")
     
     result = {
         "timezone": "Europe/Kyiv",
         "updated": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "source": "dtek-dnem.com.ua",
+        "source": "dtek-dnem.com.ua + yasno.com.ua",
         "emergency": None,
         "today": {"date": today, "groups": {}},
         "tomorrow": {"date": tomorrow, "groups": {}}
     }
+    
+    # === DTEK (Selenium) ===
+    print("=" * 40)
+    print("📡 DTEK (групи 1.x, 3.x, 5.x)")
+    print("=" * 40)
     
     driver = None
     
@@ -352,7 +489,7 @@ def main():
         popup_message = None
         is_emergency = False
         
-        for group, street in GROUP_ADDRESSES.items():
+        for group, street in DTEK_GROUPS.items():
             print(f"📍 Група {group}: {street}...")
             
             driver.get(DTEK_URL)
@@ -408,25 +545,40 @@ def main():
             if is_emergency:
                 result["emergency"] = popup_message
         
-        with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        
-        # Зберігаємо історію для прогнозування
-        save_history(result)
-        
-        print(f"\n💾 Збережено: {SCHEDULE_FILE}")
-        print(f"📊 Сьогодні: {len(result['today']['groups'])} груп")
-        print(f"📅 Завтра: {len(result['tomorrow']['groups'])} груп")
-        
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n❌ DTEK Error: {e}")
         import traceback
         traceback.print_exc()
         
     finally:
         if driver:
             driver.quit()
-            print("👋 Done")
+    
+    # === YASNO API ===
+    print("\n" + "=" * 40)
+    print("📡 YASNO API (групи 2.x, 4.x, 6.x)")
+    print("=" * 40)
+    
+    yasno_data = fetch_yasno_schedule()
+    
+    # Додаємо YASNO графіки до результату
+    for group, intervals in yasno_data["today"].items():
+        result["today"]["groups"][group] = intervals
+    
+    for group, intervals in yasno_data["tomorrow"].items():
+        result["tomorrow"]["groups"][group] = intervals
+    
+    # === Зберігаємо результат ===
+    with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    
+    # Зберігаємо історію для прогнозування
+    save_history(result)
+    
+    print(f"\n💾 Збережено: {SCHEDULE_FILE}")
+    print(f"📊 Сьогодні: {len(result['today']['groups'])} груп")
+    print(f"📅 Завтра: {len(result['tomorrow']['groups'])} груп")
+    print("👋 Done")
 
 
 if __name__ == "__main__":
