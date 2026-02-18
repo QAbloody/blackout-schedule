@@ -27,23 +27,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-        
+          
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-        
+          
       - name: 🌐 Set up Chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
-        
+          
       - name: 📦 Install dependencies
-        run: pip install selenium
-        
+        run: pip install selenium requests
+          
       - name: 🔍 Run update script
         run: python update.py
-        
+          
       - name: 📤 Upload debug artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,7 +54,7 @@ jobs:
             debug_page.png
           retention-days: 3
           if-no-files-found: ignore
-        
+          
       - name: 💾 Commit and push
         run: |
           git config user.name "GitHub Actions Bot"
