@@ -1,6 +1,6 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-04-11 07:03:24",
+  "updated": "2026-04-11 07:55:21",
   "source": "dtek-dnem.com.ua + yasno.com.ua",
   "emergency": null,
   "today": {
@@ -14,5 +14,6 @@
   "tomorrow": {
     "date": "12.04.2026",
     "groups": {}
-  }
+  },
+  "announcement": "У частині Кривого Рогу зникло світло через локальну аварію в мережі. Фахівці вже працюють над відновленням електропостачання."
 }
