@@ -1,6 +1,6 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-04-22 09:05:54",
+  "updated": "2026-04-22 10:47:33",
   "source": "dtek-dnem.com.ua + yasno.com.ua",
   "emergency": null,
   "today": {
@@ -10,5 +10,6 @@
   "tomorrow": {
     "date": "23.04.2026",
     "groups": {}
-  }
+  },
+  "announcement": "У м. Павлоград зникло світло через локальну аварію в мережі. Фахівці вже працюють над відновленням електропостачання."
 }
