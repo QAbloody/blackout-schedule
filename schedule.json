@@ -1,14 +1,14 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-04-25 23:39:58",
+  "updated": "2026-04-26 02:55:02",
   "source": "dtek-dnem.com.ua + yasno.com.ua",
   "emergency": null,
   "today": {
-    "date": "25.04.2026",
+    "date": "26.04.2026",
     "groups": {}
   },
   "tomorrow": {
-    "date": "26.04.2026",
+    "date": "27.04.2026",
     "groups": {}
   }
 }
