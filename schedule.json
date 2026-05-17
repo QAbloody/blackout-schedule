@@ -1,6 +1,6 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-05-17 21:04:33",
+  "updated": "2026-05-17 22:01:19",
   "source": "dtek-dnem.com.ua + yasno.com.ua",
   "emergency": null,
   "today": {
@@ -10,5 +10,6 @@
   "tomorrow": {
     "date": "18.05.2026",
     "groups": {}
-  }
+  },
+  "announcement": "У частині м. Марганець зникло світло через локальну аварію в мережі. Фахівці вже працюють над відновленням електропостачання."
 }
