@@ -1,14 +1,14 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-05-27 23:44:39",
+  "updated": "2026-05-28 03:49:13",
   "source": "dtek-dnem.com.ua + yasno.com.ua",
   "emergency": null,
   "today": {
-    "date": "27.05.2026",
+    "date": "28.05.2026",
     "groups": {}
   },
   "tomorrow": {
-    "date": "28.05.2026",
+    "date": "29.05.2026",
     "groups": {}
   },
   "announcement": "У частині міста Кривий Ріг зникло світло через локальну аварію в мережі. Фахівці вже працюють над відновленням електропостачання."
