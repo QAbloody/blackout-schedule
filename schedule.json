@@ -1,6 +1,6 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-06-01 05:25:14",
+  "updated": "2026-06-01 10:38:11",
   "source": "dtek-dnem.com.ua + yasno.com.ua",
   "emergency": null,
   "today": {
@@ -10,6 +10,5 @@
   "tomorrow": {
     "date": "02.06.2026",
     "groups": {}
-  },
-  "announcement": "У частині міста Нікополь зникло світло через локальну аварію в мережі. Фахівці вже працюють над відновленням електропостачання."
+  }
 }
