@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from blackout_schedule.models import build_schedule_payload, generate_groups, validate_schedule
 from blackout_schedule.models import format_day_status
+from blackout_schedule.schedule import (
+    build_schedule_payload,
+    generate_groups,
+    validate_schedule,
+)
 
 
 def test_generate_groups_has_expected_keys() -> None:

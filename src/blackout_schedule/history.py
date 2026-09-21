@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import get_settings
-from .models import build_schedule_payload, validate_schedule
+from .schedule import build_schedule_payload, validate_schedule
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -40,7 +40,10 @@ def update_schedule() -> dict:
             groups = payload["today"]["groups"]
         else:
             groups = payload["tomorrow"]["groups"]
-        history_data.setdefault("days", {})[day_key] = {"groups": groups, "updated": payload["updated"]}
+        history_data.setdefault("days", {})[day_key] = {
+            "groups": groups,
+            "updated": payload["updated"],
+        }
 
     _write_json(history_path, history_data)
     legacy_history = history_path.resolve().parent.parent / "history.json"
