@@ -17,8 +17,12 @@ def create_telegram_message(
     tomorrow_intervals: list[str],
     available: bool = False,
 ) -> str:
-    today_block = format_day_status(today_date, today_intervals, available=available)
-    tomorrow_block = format_day_status(tomorrow_date, tomorrow_intervals, available=available)
+    """Create a notification without exposing the old test-data template."""
+    if not available:
+        return "ℹ️ Графіки ще недоступні"
+
+    today_block = format_day_status(today_date, today_intervals, available=True)
+    tomorrow_block = format_day_status(tomorrow_date, tomorrow_intervals, available=True)
     return (
         f"<b>📍 Група {group_name} ДТЕК Дніпро</b>\n\n"
         f"{today_block}\n\n"
