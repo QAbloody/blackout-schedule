@@ -45,7 +45,6 @@ def get_settings() -> dict[str, str | Path | int]:
     }
 
 
-# Schedule generation and persistence
 GROUPS = [
     "1.1", "1.2", "2.1", "2.2", "3.1", "3.2",
     "4.1", "4.2", "5.1", "5.2", "6.1", "6.2",
@@ -174,7 +173,6 @@ def validate_configuration() -> list[str]:
     return issues
 
 
-# Models and formatting
 @dataclass(frozen=True)
 class Interval:
     start: time
@@ -241,7 +239,6 @@ def format_day_status(date_str: str, intervals: list[str], *, available: bool = 
     return f"{header_icon} <b>{day_name}, {date_str}</b>\n{status_icon} {intervals_text}\n📊 <i>Світло є: {on_hours:g} год. | Немає: {off_hours:g} год.</i>"
 
 
-# Parser and history helpers
 MONTHS = {
     **dict(zip("січня лютого березня квітня травня червня липня серпня вересня жовтня листопада грудня".split(), range(1, 13))),
     **dict(zip("января февраля марта апреля мая июня июля августа сентября октября ноября декабря".split(), range(1, 13))),
@@ -301,15 +298,57 @@ def append_day_history(path: str | Path, date_str: str, groups: dict[str, list[s
 
 # Telegram notifications and CLI
 
-def create_telegram_message(group_name: str, today_date: str, today_intervals: list[str], tomorrow_date: str, tomorrow_intervals: list[str], available: bool = False) -> str:
+def format_update_notice(updated: str | None) -> str:
+    """Return a short notice showing when the schedule was last refreshed."""
+    if not updated:
+        return "🕒 Станом на невідомий час графіки не оновлювались"
+    try:
+        updated_at = datetime.strptime(updated, "%Y-%m-%d %H:%M:%S")
+        shown_time = updated_at.strftime("%H:%M")
+    except ValueError:
+        shown_time = updated
+    return f"🕒 Станом на {shown_time} графіки не оновлювались"
+
+
+def create_telegram_message(
+    group_name: str,
+    today_date: str,
+    today_intervals: list[str],
+    tomorrow_date: str,
+    tomorrow_intervals: list[str],
+    available: bool = False,
+    updated: str | None = None,
+) -> str:
     if not available:
         return "ℹ️ Графіки ще недоступні"
-    return f"<b>📍 Група {group_name} ДТЕК Дніпро</b>\n\n{format_day_status(today_date, today_intervals)}\n\n{format_day_status(tomorrow_date, tomorrow_intervals)}\n_____________________\n\n👉 <b>Графіки ДТЕК Дніпро</b> 👈"
+    return (
+        f"<b>📍 Група {group_name} ДТЕК Дніпро</b>\n\n"
+        f"{format_day_status(today_date, today_intervals)}\n\n"
+        f"{format_day_status(tomorrow_date, tomorrow_intervals)}\n\n"
+        f"{format_update_notice(updated)}\n"
+        "_____________________\n\n"
+        "👉 <b>Графіки ДТЕК Дніпро</b> 👈"
+    )
 
 
 def build_default_notification(group_name: str = "1.2") -> str:
+    settings = get_settings()
     payload = build_schedule_payload()
-    return create_telegram_message(group_name, payload["today"]["date"], payload["today"]["groups"].get(group_name, []), payload["tomorrow"]["date"], payload["tomorrow"]["groups"].get(group_name, []), payload.get("available", False))
+    try:
+        stored = read_json(settings["schedule_path"])
+        if stored:
+            payload = stored
+    except (OSError, json.JSONDecodeError):
+        pass
+    return create_telegram_message(
+        group_name,
+        payload["today"]["date"],
+        payload["today"]["groups"].get(group_name, []),
+        payload["tomorrow"]["date"],
+        payload["tomorrow"]["groups"].get(group_name, []),
+        available=payload.get("available", False),
+        updated=payload.get("updated"),
+    )
 
 
 def send_telegram(text: str, bot_token: str | None = None, chat_id: str | None = None) -> bool:
@@ -318,7 +357,11 @@ def send_telegram(text: str, bot_token: str | None = None, chat_id: str | None =
     if not token or not chat or requests is None:
         return False
     try:
-        response = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=15)
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
+            timeout=15,
+        )
         response.raise_for_status()
         return True
     except requests.RequestException:
