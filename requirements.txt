@@ -1,2 +1,1 @@
 requests
-selenium>=4.15.0
