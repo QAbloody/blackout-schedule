@@ -15,9 +15,10 @@ def create_telegram_message(
     today_intervals: list[str],
     tomorrow_date: str,
     tomorrow_intervals: list[str],
+    available: bool = False,
 ) -> str:
-    today_block = format_day_status(today_date, today_intervals)
-    tomorrow_block = format_day_status(tomorrow_date, tomorrow_intervals)
+    today_block = format_day_status(today_date, today_intervals, available=available)
+    tomorrow_block = format_day_status(tomorrow_date, tomorrow_intervals, available=available)
     return (
         f"<b>📍 Група {group_name} ДТЕК Дніпро</b>\n\n"
         f"{today_block}\n\n"
@@ -55,7 +56,7 @@ def cmd_update(_: argparse.Namespace) -> int:
     from .history import update_schedule
 
     settings = get_settings()
-    payload = update_schedule()
+    update_schedule()
     print(
         __import__("json").dumps(
             {"status": "updated", "schedule_path": str(settings["schedule_path"])},
@@ -85,6 +86,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
         payload["today"]["groups"].get(args.group, []),
         payload["tomorrow"]["date"],
         payload["tomorrow"]["groups"].get(args.group, []),
+        available=payload.get("available", False),
     )
     success = send_telegram(text)
     if success:

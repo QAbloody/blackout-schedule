@@ -3,29 +3,18 @@ from __future__ import annotations
 from datetime import datetime
 
 from blackout_schedule.models import format_day_status
-from blackout_schedule.schedule import (
-    build_schedule_payload,
-    generate_groups,
-    validate_schedule,
-)
+from blackout_schedule.schedule import build_schedule_payload, validate_schedule
 
 
-def test_generate_groups_has_expected_keys() -> None:
-    groups = generate_groups()
-    assert len(groups) == 12
-    assert "1.1" in groups
-    assert "6.2" in groups
+def test_format_day_status_when_unavailable() -> None:
+    text = format_day_status("21.09.2026", [], available=False)
+    assert "Графіки ще недоступні" in text
+    assert "24 год." not in text
 
 
-def test_format_day_status_when_empty() -> None:
-    text = format_day_status("21.09.2026", [])
-    assert "21.09.2026" in text
-    assert "🟢" in text
-    assert "24 год." in text
-
-
-def test_schedule_payload_is_valid() -> None:
-    payload = build_schedule_payload(datetime(2026, 9, 21), source="TEST")
-    assert payload["today"]["date"] == "21.09.2026"
-    assert payload["tomorrow"]["date"] == "22.09.2026"
+def test_schedule_payload_does_not_use_sample_intervals() -> None:
+    payload = build_schedule_payload(datetime(2026, 9, 21))
+    assert payload["available"] is False
+    assert payload["source"] == "UNAVAILABLE"
+    assert all(not intervals for intervals in payload["today"]["groups"].values())
     assert validate_schedule(payload) == []

@@ -17,6 +17,12 @@ GROUPS = [
 
 
 def generate_intervals() -> list[str]:
+    """Generate sample intervals for development and tests only.
+
+    This intentionally remains available as a fixture for future development,
+    but is never used by the production payload until a real data source is
+    connected.
+    """
     possible_starts = [
         "00:00", "00:30", "01:00", "02:00", "03:00", "04:00", "05:00",
         "06:00", "07:00", "08:00", "09:00", "10:00", "11:00", "12:00",
@@ -38,18 +44,15 @@ def generate_intervals() -> list[str]:
         if end_minutes > 1440:
             continue
 
-        overlap = False
-        for old_start, old_end in used:
-            if start_minutes < old_end and end_minutes > old_start:
-                overlap = True
-                break
-        if overlap:
+        if any(
+            start_minutes < old_end and end_minutes > old_start
+            for old_start, old_end in used
+        ):
             continue
 
         end_hour = end_minutes // 60
         end_minute = end_minutes % 60
-        interval = f"{start}-{end_hour:02d}:{end_minute:02d}"
-        intervals.append(interval)
+        intervals.append(f"{start}-{end_hour:02d}:{end_minute:02d}")
         used.append((start_minutes, end_minutes))
 
     intervals.sort()
@@ -57,22 +60,32 @@ def generate_intervals() -> list[str]:
 
 
 def generate_groups() -> dict[str, list[str]]:
+    """Return sample groups for development and tests only."""
     return {group: generate_intervals() for group in GROUPS}
 
 
-def build_schedule_payload(now: datetime | None = None, source: str = "TEST DATA") -> dict[str, Any]:
+def build_schedule_payload(
+    now: datetime | None = None,
+    source: str = "UNAVAILABLE",
+) -> dict[str, Any]:
+    """Build a payload without presenting generated data as a real schedule.
+
+    The old random generator is kept above as a future fixture, but fake
+    intervals must not be sent to users. A real parser/source can later return
+    the same payload shape with ``available=True`` and populated groups.
+    """
     now = now or datetime.now()
     today = now.strftime("%d.%m.%Y")
     tomorrow = (now + timedelta(days=1)).strftime("%d.%m.%Y")
-    today_groups = generate_groups()
-    tomorrow_groups = generate_groups()
+    empty_groups = {group: [] for group in GROUPS}
     return {
         "timezone": "Europe/Kyiv",
         "updated": now.strftime("%Y-%m-%d %H:%M:%S"),
         "source": source,
+        "available": False,
         "emergency": None,
-        "today": {"date": today, "groups": today_groups},
-        "tomorrow": {"date": tomorrow, "groups": tomorrow_groups},
+        "today": {"date": today, "groups": empty_groups.copy()},
+        "tomorrow": {"date": tomorrow, "groups": empty_groups.copy()},
     }
 
 

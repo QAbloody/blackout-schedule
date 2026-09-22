@@ -53,9 +53,12 @@ def normalize_intervals(intervals: list[str]) -> list[str]:
     return sorted(set(cleaned))
 
 
-def format_day_status(date_str: str, intervals: list[str]) -> str:
-    from datetime import datetime
-
+def format_day_status(
+    date_str: str,
+    intervals: list[str],
+    *,
+    available: bool = True,
+) -> str:
     dt = datetime.strptime(date_str, "%d.%m.%Y")
     day_name = [
         "Понеділок",
@@ -67,7 +70,11 @@ def format_day_status(date_str: str, intervals: list[str]) -> str:
         "Неділя",
     ][dt.weekday()]
 
-    off_minutes = sum((Interval.from_string(interval).duration_minutes) for interval in intervals)
+    header = f"📝 <b>{day_name}, {date_str}</b>"
+    if not available:
+        return f"{header}\nℹ️ Графіки ще недоступні"
+
+    off_minutes = sum(Interval.from_string(interval).duration_minutes for interval in intervals)
     on_minutes = 24 * 60 - off_minutes
     off_hours = round(off_minutes / 60, 1)
     on_hours = round(on_minutes / 60, 1)
