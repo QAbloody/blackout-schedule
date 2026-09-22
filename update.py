@@ -5,7 +5,7 @@ import json
 import traceback
 import requests
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # ============================================================
@@ -107,6 +107,13 @@ def minutes_to_hhmm(minutes):
     return f"{h:02d}:{m:02d}"
 
 
+def iso_date_to_ddmmyyyy(iso_date):
+    try:
+        return datetime.fromisoformat(iso_date).strftime("%d.%m.%Y")
+    except (ValueError, TypeError):
+        return iso_date
+
+
 def slots_to_intervals(slots):
     """slots: list of {"start": int_minutes, "end": int_minutes, "type": str}."""
 
@@ -199,7 +206,9 @@ def fetch_yasno_schedule():
 
     result = {
         "today": {},
-        "tomorrow": {}
+        "tomorrow": {},
+        "statuses": {"today": {}, "tomorrow": {}},
+        "dates": {"today": None, "tomorrow": None},
     }
 
     try:
@@ -223,6 +232,17 @@ def fetch_yasno_schedule():
             print("❌ Неочікуваний формат відповіді")
             return result
 
+        if os.getenv("YASNO_DEBUG"):
+            sample_group = YASNO_GROUPS[0]
+            print(
+                f"🐛 DEBUG сирі дані для групи {sample_group}:\n"
+                + json.dumps(
+                    data.get(sample_group, {}),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+
         for group in YASNO_GROUPS:
 
             group_data = data.get(group)
@@ -231,14 +251,38 @@ def fetch_yasno_schedule():
                 print(f"⚠️ Група {group}: даних немає")
                 continue
 
-            today_slots = group_data.get("today", {}).get("slots", [])
-            tomorrow_slots = group_data.get("tomorrow", {}).get("slots", [])
+            today_block = group_data.get("today", {}) or {}
+            tomorrow_block = group_data.get("tomorrow", {}) or {}
+
+            today_status = today_block.get("status")
+            tomorrow_status = tomorrow_block.get("status")
+
+            print(
+                f"    ℹ️ {group}: статус сьогодні={today_status}, "
+                f"завтра={tomorrow_status}"
+            )
+
+            today_slots = today_block.get("slots", [])
+            tomorrow_slots = tomorrow_block.get("slots", [])
 
             today_intervals = slots_to_intervals(today_slots)
             tomorrow_intervals = slots_to_intervals(tomorrow_slots)
 
             result["today"][group] = today_intervals
             result["tomorrow"][group] = tomorrow_intervals
+
+            result["statuses"]["today"][group] = today_status
+            result["statuses"]["tomorrow"][group] = tomorrow_status
+
+            if not result["dates"]["today"] and today_block.get("date"):
+                result["dates"]["today"] = iso_date_to_ddmmyyyy(
+                    today_block["date"]
+                )
+
+            if not result["dates"]["tomorrow"] and tomorrow_block.get("date"):
+                result["dates"]["tomorrow"] = iso_date_to_ddmmyyyy(
+                    tomorrow_block["date"]
+                )
 
             today_minutes = sum_intervals(today_intervals)
             tomorrow_minutes = sum_intervals(tomorrow_intervals)
@@ -275,25 +319,41 @@ def main():
 
     now = datetime.now()
 
-    today = now.strftime("%d.%m.%Y")
-    tomorrow = now.strftime("%d.%m.%Y")
+    yasno_data = fetch_yasno_schedule()
+
+    # дата береться з відповіді API, якщо вона там є;
+    # інакше рахуємо локально (сьогодні / сьогодні+1)
+    today = yasno_data.get("dates", {}).get("today") or now.strftime(
+        "%d.%m.%Y"
+    )
+    tomorrow = yasno_data.get("dates", {}).get("tomorrow") or (
+        now + timedelta(days=1)
+    ).strftime("%d.%m.%Y")
 
     print()
     print(f"📅 Сьогодні: {today}")
     print(f"📅 Завтра: {tomorrow}")
 
-    yasno_data = fetch_yasno_schedule()
-
     today_groups = dict(yasno_data.get("today", {}))
     tomorrow_groups = dict(yasno_data.get("tomorrow", {}))
 
+    today_statuses = dict(yasno_data.get("statuses", {}).get("today", {}))
+    tomorrow_statuses = dict(
+        yasno_data.get("statuses", {}).get("tomorrow", {})
+    )
+
+    # якщо групи взагалі немає в даних API (запит не вдався,
+    # або групу не знайдено) — статус явно позначаємо як "невідомо",
+    # щоб бот міг написати "графіки не надходили" замість "світло весь день"
     for group in ALL_GROUPS:
 
         if group not in today_groups:
             today_groups[group] = []
+            today_statuses.setdefault(group, None)
 
         if group not in tomorrow_groups:
             tomorrow_groups[group] = []
+            tomorrow_statuses.setdefault(group, None)
 
     result = {
 
@@ -305,12 +365,14 @@ def main():
 
         "today": {
             "date": today,
-            "groups": today_groups
+            "groups": today_groups,
+            "statuses": today_statuses
         },
 
         "tomorrow": {
             "date": tomorrow,
-            "groups": tomorrow_groups
+            "groups": tomorrow_groups,
+            "statuses": tomorrow_statuses
         }
     }
 
