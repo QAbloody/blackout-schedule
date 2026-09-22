@@ -39,6 +39,8 @@ jobs:
         env:
           YASNO_REGION_ID: "3"
           YASNO_PROVIDER_ID: "301"
+          ALERT_BOT_TOKEN: ${{ secrets.ALERT_BOT_TOKEN }}
+          ALERT_CHAT_ID: ${{ secrets.ALERT_CHAT_ID }}
         run: python update.py
 
       - name: Commit schedule.json
@@ -48,3 +50,11 @@ jobs:
           git add schedule.json
           git diff --staged --quiet || git commit -m "Update schedule $(date -u +'%Y-%m-%d %H:%M') UTC"
           git push
+
+      - name: Notify on workflow failure
+        if: failure()
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.ALERT_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.ALERT_CHAT_ID }}" \
+            -d text="🚨 YASNO PARSER: workflow ${{ github.workflow }} впав на кроці, який не зловив update.py (run: ${{ github.run_id }}). Дивись лог в Actions."
