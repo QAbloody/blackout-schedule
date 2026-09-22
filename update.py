@@ -2,8 +2,6 @@
 """Single-file CLI and implementation for blackout-schedule."""
 from __future__ import annotations
 
-#Imports
-
 import argparse
 import json
 import os
@@ -181,7 +179,7 @@ class Interval:
     end: time
 
     @classmethod
-    def from_string(cls, raw: str) -> "Interval":
+    def from_string(cls, raw: str) -> Interval:
         start_text, end_text = raw.replace(" ", "").split("-")
         return cls(_to_time(start_text), _to_time(end_text))
 
@@ -301,7 +299,7 @@ def append_day_history(path: str | Path, date_str: str, groups: dict[str, list[s
 # Telegram notifications and CLI
 
 def format_update_notice(updated: str | None) -> str:
-    """Return a short notice showing when the schedule was last refreshed."""
+    """Return a short notice showing when the schedule was last checked/refreshed."""
     if not updated:
         return "🕒 Станом на невідомий час графіки не оновлювались"
     try:
@@ -322,7 +320,13 @@ def create_telegram_message(
     updated: str | None = None,
 ) -> str:
     if not available:
-        return "ℹ️ Графіки ще недоступні"
+        return (
+            f"<b>📍 Група {group_name} ДТЕК Дніпро</b>\n\n"
+            f"ℹ️ Графіки ще недоступні\n\n"
+            f"{format_update_notice(updated)}\n"
+            "_____________________\n\n"
+            "👉 <b>Графіки ДТЕК Дніпро</b> 👈"
+        )
     return (
         f"<b>📍 Група {group_name} ДТЕК Дніпро</b>\n\n"
         f"{format_day_status(today_date, today_intervals)}\n\n"
