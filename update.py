@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 import json
 import traceback
 import requests
@@ -114,6 +115,32 @@ def iso_date_to_ddmmyyyy(iso_date):
         return iso_date
 
 
+ALERT_BOT_TOKEN = os.getenv("ALERT_BOT_TOKEN")
+ALERT_CHAT_ID = os.getenv("ALERT_CHAT_ID")
+
+
+def send_telegram_alert(message):
+    """Шле повідомлення в Telegram про збій парсера. Тихо пропускає,
+    якщо ALERT_BOT_TOKEN / ALERT_CHAT_ID не задані (наприклад, локально)."""
+
+    if not ALERT_BOT_TOKEN or not ALERT_CHAT_ID:
+        print("⚠️ ALERT_BOT_TOKEN / ALERT_CHAT_ID не задані — сповіщення пропущено")
+        return
+
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{ALERT_BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": ALERT_CHAT_ID,
+                "text": message,
+                "disable_web_page_preview": True,
+            },
+            timeout=15,
+        )
+    except Exception as e:
+        print(f"⚠️ Не вдалося надіслати сповіщення в Telegram: {e}")
+
+
 def slots_to_intervals(slots):
     """slots: list of {"start": int_minutes, "end": int_minutes, "type": str}."""
 
@@ -209,6 +236,7 @@ def fetch_yasno_schedule():
         "tomorrow": {},
         "statuses": {"today": {}, "tomorrow": {}},
         "dates": {"today": None, "tomorrow": None},
+        "error": None,
     }
 
     try:
@@ -303,6 +331,7 @@ def fetch_yasno_schedule():
 
         print(f"❌ Помилка YASNO: {e}")
         traceback.print_exc()
+        result["error"] = str(e)
 
     return result
 
@@ -354,6 +383,41 @@ def main():
         if group not in tomorrow_groups:
             tomorrow_groups[group] = []
             tomorrow_statuses.setdefault(group, None)
+
+    # ------------------------------------------------------------
+    # ПЕРЕВІРКА НА ПОВНИЙ ЗБІЙ
+    # ------------------------------------------------------------
+
+    all_missing = all(
+        v is None for v in today_statuses.values()
+    ) and all(
+        v is None for v in tomorrow_statuses.values()
+    )
+
+    if yasno_data.get("error") or all_missing:
+
+        reason = yasno_data.get("error") or (
+            "Дані по жодній групі не отримано "
+            "(порожня/неочікувана відповідь API)"
+        )
+
+        alert_text = (
+            "🚨 YASNO PARSER: збій оновлення графіка\n\n"
+            f"Час: {now.strftime('%Y-%m-%d %H:%M:%S')} (лок.)\n"
+            f"Причина: {reason}\n\n"
+            "schedule.json НЕ перезаписано — залишено попередню версію."
+        )
+
+        print()
+        print("=" * 60)
+        print(alert_text)
+        print("=" * 60)
+
+        send_telegram_alert(alert_text)
+
+        # не перезаписуємо schedule.json порожніми даними —
+        # хай краще лишиться остання робоча версія
+        sys.exit(1)
 
     result = {
 
