@@ -1,6 +1,6 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-09-22 08:27:24",
+  "updated": "2026-09-22 08:29:48",
   "source": "app.yasno.ua",
   "today": {
     "date": "22.09.2026",
@@ -17,10 +17,24 @@
       "5.2": [],
       "6.1": [],
       "6.2": []
+    },
+    "statuses": {
+      "1.1": "NoOutages",
+      "1.2": "NoOutages",
+      "2.1": "NoOutages",
+      "2.2": "NoOutages",
+      "3.1": "NoOutages",
+      "3.2": "NoOutages",
+      "4.1": "NoOutages",
+      "4.2": "NoOutages",
+      "5.1": "NoOutages",
+      "5.2": "NoOutages",
+      "6.1": "NoOutages",
+      "6.2": "NoOutages"
     }
   },
   "tomorrow": {
-    "date": "22.09.2026",
+    "date": "23.09.2026",
     "groups": {
       "1.1": [],
       "1.2": [],
@@ -34,6 +48,20 @@
       "5.2": [],
       "6.1": [],
       "6.2": []
+    },
+    "statuses": {
+      "1.1": "WaitingForSchedule",
+      "1.2": "WaitingForSchedule",
+      "2.1": "WaitingForSchedule",
+      "2.2": "WaitingForSchedule",
+      "3.1": "WaitingForSchedule",
+      "3.2": "WaitingForSchedule",
+      "4.1": "WaitingForSchedule",
+      "4.2": "WaitingForSchedule",
+      "5.1": "WaitingForSchedule",
+      "5.2": "WaitingForSchedule",
+      "6.1": "WaitingForSchedule",
+      "6.2": "WaitingForSchedule"
     }
   }
 }
