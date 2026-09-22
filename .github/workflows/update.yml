@@ -1,90 +1,36 @@
-name: Update Schedule
+name: Update schedule
 
 on:
-  schedule:
-    - cron: '5,35 * * * *'
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'update.py'
-      - '.github/workflows/update.yml'
-
-concurrency:
-  group: update-schedule
-  cancel-in-progress: false
+  schedule:
+    - cron: "*/30 * * * *"
 
 jobs:
   update:
-    name: Check and update schedule
     runs-on: ubuntu-latest
-    
-    permissions:
-      contents: write
-    
+
     steps:
-      - name: 📥 Checkout
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          
-      - name: 🐍 Set up Python
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          
-      - name: 🌐 Set up Chrome
-        uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: stable
-          
-      - name: 📦 Install dependencies
-        run: pip install selenium requests
-          
-      - name: 🔍 Run update script
-        run: python update.py
-          
-      - name: 📤 Upload debug artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-${{ github.run_number }}
-          path: |
-            debug_page.html
-            debug_page.png
-          retention-days: 3
-          if-no-files-found: ignore
-          
-      - name: 💾 Commit and push
+          python-version: "3.11"
+
+      - name: Install dependencies
         run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Зберігаємо зміни
-          git stash push -m "schedule" -- schedule.json || true
-          
-          # Оновлюємо з remote
-          git fetch origin main
-          git reset --hard origin/main
-          
-          # Повертаємо наші зміни
-          git stash pop || true
-          
-          # Комітимо
-          git add schedule.json history.json
-          
-          if git diff --staged --quiet; then
-            echo "✅ No changes"
-          else
-            git commit -m "🔄 Update schedule $(date -u +%Y-%m-%d\ %H:%M\ UTC)"
-            
-            # Пробуємо push з retry
-            for i in 1 2 3; do
-              git push && break
-              echo "⏳ Retry $i..."
-              sleep 2
-              git pull --rebase origin main
-            done
-            
-            echo "✅ Pushed"
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check update.py
+        run: |
+          echo "=== CURRENT DIRECTORY ==="
+          pwd
+          echo "=== UPDATE.PY ==="
+          head -30 update.py
+          echo "=== FILES ==="
+          ls -la
+
+      - name: Run parser
+        run: python update.py
