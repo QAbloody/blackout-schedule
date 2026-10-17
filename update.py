@@ -7,6 +7,7 @@ import traceback
 import requests
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 
 # ============================================================
@@ -24,6 +25,12 @@ PLANNED_OUTAGES_ENDPOINT = (
 )
 
 SCHEDULE_FILE = os.getenv("SCHEDULE_FILE", "schedule.json")
+
+# Файл зі станом сповіщень (що вже надіслано), щоб не дублювати повідомлення.
+# Його треба зберігати між запусками (див. коментар у кінці відповіді).
+STATE_FILE = os.getenv("STATE_FILE", "notify_state.json")
+
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
 # Якщо відомі — постав сюди готові id, і скрипт більше не буде
 # щоразу ходити за списком регіонів/провайдерів (швидше і надійніше).
@@ -45,6 +52,30 @@ YASNO_GROUPS = [
 ]
 
 ALL_GROUPS = YASNO_GROUPS
+
+
+# ============================================================
+# НАСТРОЙКИ СПОВІЩЕНЬ
+# ============================================================
+
+ALERT_BOT_TOKEN = os.getenv("ALERT_BOT_TOKEN")
+ALERT_CHAT_ID = os.getenv("ALERT_CHAT_ID")
+
+# Куди слати сповіщення про графіки та відключення.
+# Якщо окремо не задано — використовується той самий бот/чат, що й для алертів.
+NOTIFY_BOT_TOKEN = os.getenv("NOTIFY_BOT_TOKEN") or ALERT_BOT_TOKEN
+NOTIFY_CHAT_ID = os.getenv("NOTIFY_CHAT_ID") or ALERT_CHAT_ID
+
+# Для яких груп слати сповіщення, через кому: NOTIFY_GROUPS="3.1,3.2"
+# Якщо не задано — для всіх груп (це буде багато повідомлень, краще задати свою).
+NOTIFY_GROUPS = [
+    g.strip()
+    for g in os.getenv("NOTIFY_GROUPS", "").split(",")
+    if g.strip()
+] or list(YASNO_GROUPS)
+
+# За скільки хвилин попереджати про відключення
+REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "30"))
 
 
 # ============================================================
@@ -108,6 +139,11 @@ def minutes_to_hhmm(minutes):
     return f"{h:02d}:{m:02d}"
 
 
+def hhmm_to_minutes(value):
+    h, m = map(int, value.split(":"))
+    return h * 60 + m
+
+
 def iso_date_to_ddmmyyyy(iso_date):
     try:
         return datetime.fromisoformat(iso_date).strftime("%d.%m.%Y")
@@ -115,8 +151,43 @@ def iso_date_to_ddmmyyyy(iso_date):
         return iso_date
 
 
-ALERT_BOT_TOKEN = os.getenv("ALERT_BOT_TOKEN")
-ALERT_CHAT_ID = os.getenv("ALERT_CHAT_ID")
+def parse_ddmmyyyy(value):
+    try:
+        return datetime.strptime(value, "%d.%m.%Y")
+    except (ValueError, TypeError):
+        return None
+
+
+def send_telegram_message(token, chat_id, message):
+    """Шле повідомлення в Telegram. Повертає True, якщо відправлено."""
+
+    if not token or not chat_id:
+        print("⚠️ Токен/чат Telegram не задані — повідомлення пропущено")
+        return False
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": message,
+                "disable_web_page_preview": True,
+            },
+            timeout=15,
+        )
+
+        if response.status_code != 200:
+            print(
+                f"⚠️ Telegram відповів {response.status_code}: "
+                f"{response.text[:200]}"
+            )
+            return False
+
+        return True
+
+    except Exception as e:
+        print(f"⚠️ Не вдалося надіслати повідомлення в Telegram: {e}")
+        return False
 
 
 def send_telegram_alert(message):
@@ -127,18 +198,11 @@ def send_telegram_alert(message):
         print("⚠️ ALERT_BOT_TOKEN / ALERT_CHAT_ID не задані — сповіщення пропущено")
         return
 
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{ALERT_BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": ALERT_CHAT_ID,
-                "text": message,
-                "disable_web_page_preview": True,
-            },
-            timeout=15,
-        )
-    except Exception as e:
-        print(f"⚠️ Не вдалося надіслати сповіщення в Telegram: {e}")
+    send_telegram_message(ALERT_BOT_TOKEN, ALERT_CHAT_ID, message)
+
+
+def send_notification(message):
+    return send_telegram_message(NOTIFY_BOT_TOKEN, NOTIFY_CHAT_ID, message)
 
 
 def slots_to_intervals(slots):
@@ -158,6 +222,224 @@ def slots_to_intervals(slots):
         intervals.append(f"{start}-{end}")
 
     return merge_intervals(intervals)
+
+
+# ============================================================
+# NOTIFICATIONS
+# ============================================================
+
+def load_state():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as file:
+            state = json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        state = {}
+
+    state.setdefault("schedules", {})   # {дата: {група: хеш графіка}}
+    state.setdefault("reminders", [])   # ключі вже надісланих нагадувань
+
+    return state
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as file:
+        json.dump(state, file, ensure_ascii=False, indent=2)
+
+
+def schedule_ready(status):
+    """Графік на день уже опубліковано (а не 'очікується')."""
+    return status is not None and status != "WaitingForSchedule"
+
+
+def format_intervals(intervals):
+    if not intervals:
+        return "відключень не заплановано ✅"
+
+    return ", ".join(i.replace("-", "–") for i in intervals)
+
+
+def notify_schedules(days, state):
+    """Повідомляє, коли з'явився (або змінився) графік на сьогодні/завтра.
+
+    Стан зберігається по даті, тому графік, про який уже повідомили
+    як про "завтра", не дублюється наступного дня як "сьогодні".
+    """
+
+    for label, date_str, groups, statuses in days:
+
+        known = state["schedules"].setdefault(date_str, {})
+
+        new_lines = []
+        changed_lines = []
+        pending = {}
+
+        for group in NOTIFY_GROUPS:
+
+            if not schedule_ready(statuses.get(group)):
+                continue
+
+            intervals = groups.get(group, [])
+            digest = "|".join(intervals) or "none"
+            previous = known.get(group)
+
+            if previous == digest:
+                continue
+
+            line = f"🔹 Група {group}: {format_intervals(intervals)}"
+
+            if previous is None:
+                new_lines.append(line)
+            else:
+                changed_lines.append(line)
+
+            pending[group] = digest
+
+        if not pending:
+            continue
+
+        sent_all = True
+
+        if new_lines:
+            text = (
+                f"📅 З'явився графік на {label} ({date_str})\n\n"
+                + "\n".join(new_lines)
+            )
+            sent_all = send_notification(text) and sent_all
+
+        if changed_lines:
+            text = (
+                f"⚠️ Графік на {label} ({date_str}) змінився\n\n"
+                + "\n".join(changed_lines)
+            )
+            sent_all = send_notification(text) and sent_all
+
+        # запам'ятовуємо лише після успішної відправки,
+        # інакше наступний запуск спробує ще раз
+        if sent_all:
+            known.update(pending)
+
+
+def build_outage_events(group, days):
+    """Повертає список (початок, кінець) відключень групи як datetime,
+    зливаючи інтервали через північ (24:00 → 00:00)."""
+
+    events = []
+
+    for _label, date_str, groups, statuses in days:
+
+        day = parse_ddmmyyyy(date_str)
+
+        if day is None or not schedule_ready(statuses.get(group)):
+            continue
+
+        for interval in groups.get(group, []):
+
+            start_s, end_s = interval.split("-")
+
+            start = day + timedelta(minutes=hhmm_to_minutes(start_s))
+
+            if end_s == "24:00":
+                end = day + timedelta(days=1)
+            else:
+                end = day + timedelta(minutes=hhmm_to_minutes(end_s))
+
+            events.append((start, end))
+
+    events.sort()
+
+    merged = []
+
+    for start, end in events:
+        if merged and merged[-1][1] == start:
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+
+    return merged
+
+
+def notify_upcoming_outages(now, days, state):
+    """Попереджає за REMIND_MINUTES хвилин до початку відключення."""
+
+    sent_keys = set(state["reminders"])
+
+    lines = []
+    new_keys = []
+
+    for group in NOTIFY_GROUPS:
+
+        for start, end in build_outage_events(group, days):
+
+            minutes_left = (start - now).total_seconds() / 60
+
+            if not (0 < minutes_left <= REMIND_MINUTES):
+                continue
+
+            key = f"{group}|{start:%Y-%m-%d %H:%M}"
+
+            if key in sent_keys:
+                continue
+
+            end_text = end.strftime("%H:%M")
+            if end_text == "00:00":
+                end_text = "24:00"
+
+            lines.append(
+                f"🔹 Група {group}: {start:%H:%M}–{end_text} "
+                f"(через ~{int(round(minutes_left))} хв)"
+            )
+            new_keys.append(key)
+
+    if not lines:
+        return
+
+    text = (
+        f"⏰ Скоро відключення світла (менше ніж за {REMIND_MINUTES} хв)\n\n"
+        + "\n".join(lines)
+    )
+
+    if send_notification(text):
+        state["reminders"].extend(new_keys)
+
+
+def prune_state(state, now):
+    """Видаляє застарілі записи зі стану."""
+
+    cutoff = (now - timedelta(days=2)).date()
+
+    state["schedules"] = {
+        d: v
+        for d, v in state["schedules"].items()
+        if (parse_ddmmyyyy(d) is not None
+            and parse_ddmmyyyy(d).date() >= cutoff)
+    }
+
+    cutoff_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    state["reminders"] = [
+        k for k in state["reminders"]
+        if k.split("|")[-1][:10] >= cutoff_str
+    ]
+
+
+def process_notifications(now, days):
+    print()
+    print("=" * 60)
+    print("🔔 СПОВІЩЕННЯ")
+    print("=" * 60)
+    print(f"Групи: {', '.join(NOTIFY_GROUPS)}")
+
+    state = load_state()
+
+    try:
+        notify_schedules(days, state)
+        notify_upcoming_outages(now, days, state)
+    except Exception as e:
+        print(f"❌ Помилка сповіщень: {e}")
+        traceback.print_exc()
+    finally:
+        prune_state(state, now)
+        save_state(state)
 
 
 # ============================================================
@@ -346,7 +628,8 @@ def main():
     print("🚀 YASNO PARSER (new API)")
     print("=" * 60)
 
-    now = datetime.now()
+    # завжди київський час, незалежно від часового поясу сервера
+    now = datetime.now(KYIV_TZ).replace(tzinfo=None)
 
     yasno_data = fetch_yasno_schedule()
 
@@ -403,7 +686,7 @@ def main():
 
         alert_text = (
             "🚨 YASNO PARSER: збій оновлення графіка\n\n"
-            f"Час: {now.strftime('%Y-%m-%d %H:%M:%S')} (лок.)\n"
+            f"Час: {now.strftime('%Y-%m-%d %H:%M:%S')} (Київ)\n"
             f"Причина: {reason}\n\n"
             "schedule.json НЕ перезаписано — залишено попередню версію."
         )
@@ -467,6 +750,18 @@ def main():
             f"сьогодні={today_v or 'немає'} | "
             f"завтра={tomorrow_v or 'немає'}"
         )
+
+    # ------------------------------------------------------------
+    # СПОВІЩЕННЯ В TELEGRAM
+    # ------------------------------------------------------------
+
+    process_notifications(
+        now,
+        [
+            ("сьогодні", today, today_groups, today_statuses),
+            ("завтра", tomorrow, tomorrow_groups, tomorrow_statuses),
+        ],
+    )
 
     print()
     print("✅ PARSER FINISHED")
