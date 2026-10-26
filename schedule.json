@@ -1,36 +1,60 @@
 {
   "timezone": "Europe/Kyiv",
-  "updated": "2026-10-26 02:34:17",
+  "updated": "2026-10-26 07:48:44",
   "source": "app.yasno.ua",
   "today": {
     "date": "26.10.2026",
     "groups": {
-      "1.1": [],
-      "1.2": [],
-      "2.1": [],
-      "2.2": [],
-      "3.1": [],
-      "3.2": [],
-      "4.1": [],
-      "4.2": [],
-      "5.1": [],
-      "5.2": [],
-      "6.1": [],
-      "6.2": []
+      "1.1": [
+        "18:00-22:00"
+      ],
+      "1.2": [
+        "18:00-22:00"
+      ],
+      "2.1": [
+        "09:00-11:30"
+      ],
+      "2.2": [
+        "09:00-11:30"
+      ],
+      "3.1": [
+        "21:30-24:00"
+      ],
+      "3.2": [
+        "21:30-24:00"
+      ],
+      "4.1": [
+        "11:00-15:00"
+      ],
+      "4.2": [
+        "11:00-15:00"
+      ],
+      "5.1": [
+        "07:00-09:30"
+      ],
+      "5.2": [
+        "07:00-09:30"
+      ],
+      "6.1": [
+        "14:30-18:30"
+      ],
+      "6.2": [
+        "14:30-18:30"
+      ]
     },
     "statuses": {
-      "1.1": "NoOutages",
-      "1.2": "NoOutages",
-      "2.1": "NoOutages",
-      "2.2": "NoOutages",
-      "3.1": "NoOutages",
-      "3.2": "NoOutages",
-      "4.1": "NoOutages",
-      "4.2": "NoOutages",
-      "5.1": "NoOutages",
-      "5.2": "NoOutages",
-      "6.1": "NoOutages",
-      "6.2": "NoOutages"
+      "1.1": "ScheduleApplies",
+      "1.2": "ScheduleApplies",
+      "2.1": "ScheduleApplies",
+      "2.2": "ScheduleApplies",
+      "3.1": "ScheduleApplies",
+      "3.2": "ScheduleApplies",
+      "4.1": "ScheduleApplies",
+      "4.2": "ScheduleApplies",
+      "5.1": "ScheduleApplies",
+      "5.2": "ScheduleApplies",
+      "6.1": "ScheduleApplies",
+      "6.2": "ScheduleApplies"
     }
   },
   "tomorrow": {
