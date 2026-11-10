@@ -442,6 +442,122 @@ def resolve_region_and_provider():
 
 
 # ============================================================
+# ДЖЕРЕЛА ДАНИХ: браузер (основне) -> прямий API (запасне)
+# ============================================================
+
+PAGE_URL = os.getenv("YASNO_PAGE_URL", "https://static.yasno.ua/dnipro/outages/")
+
+
+def looks_like_schedule(data):
+    """JSON з графіком: ключі-групи ('1.1', '3.2'...) з блоками today/tomorrow."""
+    if not isinstance(data, dict):
+        return False
+    group = data.get("1.1") or data.get("3.1")
+    return isinstance(group, dict) and "today" in group
+
+
+def has_real_schedule(data):
+    """Є хоча б один день, де графік уже застосовується."""
+    if not looks_like_schedule(data):
+        return False
+    for group in data.values():
+        if not isinstance(group, dict):
+            continue
+        for day in ("today", "tomorrow"):
+            status = (group.get(day) or {}).get("status")
+            if schedule_ready(status):
+                return True
+    return False
+
+
+def fetch_via_browser(timeout_ms=30000):
+    """Відкриває сторінку Yasno і перехоплює JSON, який вона сама завантажує."""
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("⚠️ playwright не встановлено — пропускаємо браузерний спосіб")
+        return None
+
+    found = []
+
+    def on_response(response):
+        try:
+            if "json" not in response.headers.get("content-type", ""):
+                return
+            data = response.json()
+        except Exception:
+            return
+        if looks_like_schedule(data):
+            found.append((response.url, data))
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.on("response", on_response)
+            page.goto(PAGE_URL, wait_until="networkidle", timeout=timeout_ms)
+            page.wait_for_timeout(3000)
+            browser.close()
+    except Exception as e:
+        print(f"⚠️ Браузерний спосіб не спрацював: {e}")
+        return None
+
+    if not found:
+        print("⚠️ Браузер не перехопив JSON з графіком")
+        return None
+
+    url, data = found[-1]
+    print(f"🌐 Перехоплено API зі сторінки: {url}")
+    return data
+
+
+def fetch_via_api():
+    """Прямий запит до API (Дніпро, ДнЕМ)."""
+
+    region_id, provider_id = resolve_region_and_provider()
+
+    url = PLANNED_OUTAGES_ENDPOINT.format(
+        region_id=region_id,
+        dso_id=provider_id,
+    )
+
+    try:
+        response = requests.get(url, timeout=30)
+        print(f"HTTP: {response.status_code} ({url})")
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        print(f"⚠️ Прямий запит до API не вдався: {e}")
+        return None
+
+    return data if looks_like_schedule(data) else None
+
+
+def get_schedule_data():
+    """Повертає найкращі доступні дані: перевага — тим, де вже є графік."""
+
+    candidates = []
+
+    for name, fetcher in (("браузер", fetch_via_browser),
+                          ("API", fetch_via_api)):
+        print(f"🔎 Джерело: {name}")
+        data = fetcher()
+        if data is None:
+            continue
+        if has_real_schedule(data):
+            print(f"✅ Графік знайдено ({name})")
+            return data
+        print(f"ℹ️ ({name}) відповідь є, але графік ще не опубліковано")
+        candidates.append(data)
+
+    if candidates:
+        return candidates[0]
+
+    raise RuntimeError("Жодне джерело не повернуло дані з графіком")
+
+
+# ============================================================
 # FETCH SCHEDULE
 # ============================================================
 
@@ -461,20 +577,7 @@ def fetch_yasno_schedule():
 
     try:
 
-        region_id, provider_id = resolve_region_and_provider()
-
-        url = PLANNED_OUTAGES_ENDPOINT.format(
-            region_id=region_id,
-            dso_id=provider_id,
-        )
-
-        response = requests.get(url, timeout=30)
-
-        print(f"HTTP: {response.status_code}")
-
-        response.raise_for_status()
-
-        data = response.json()
+        data = get_schedule_data()
 
         if not isinstance(data, dict):
             print("❌ Неочікуваний формат відповіді")
