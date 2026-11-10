@@ -3,7 +3,11 @@ name: Update schedule
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/15 * * * *"
+
+concurrency:
+  group: update-schedule
+  cancel-in-progress: false
 
 jobs:
   update:
@@ -26,29 +30,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Check update.py
-        run: |
-          echo "=== CURRENT DIRECTORY ==="
-          pwd
-          echo "=== UPDATE.PY ==="
-          head -30 update.py
-          echo "=== FILES ==="
-          ls -la
+      - name: Install browser
+        run: playwright install --with-deps chromium
 
       - name: Run parser
         env:
-          YASNO_REGION_ID: "3"
-          YASNO_PROVIDER_ID: "301"
           ALERT_BOT_TOKEN: ${{ secrets.ALERT_BOT_TOKEN }}
           ALERT_CHAT_ID: ${{ secrets.ALERT_CHAT_ID }}
+          NOTIFY_BOT_TOKEN: ${{ secrets.NOTIFY_BOT_TOKEN }}
+          NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
+          NOTIFY_GROUPS: "3.1,3.2"
         run: python update.py
 
-      - name: Commit schedule.json
+      - name: Commit schedule.json and state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add schedule.json
+          git add schedule.json notify_state.json
           git diff --staged --quiet || git commit -m "Update schedule $(date -u +'%Y-%m-%d %H:%M') UTC"
+          git pull --rebase
           git push
 
       - name: Notify on workflow failure
