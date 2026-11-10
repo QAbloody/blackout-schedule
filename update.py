@@ -14,11 +14,6 @@ from zoneinfo import ZoneInfo
 # НАСТРОЙКИ
 # ============================================================
 
-REGIONS_ENDPOINT = (
-    "https://app.yasno.ua/api/blackout-service/public/shutdowns/"
-    "addresses/v2/regions"
-)
-
 PLANNED_OUTAGES_ENDPOINT = (
     "https://app.yasno.ua/api/blackout-service/public/shutdowns/"
     "regions/{region_id}/dsos/{dso_id}/planned-outages"
@@ -27,19 +22,14 @@ PLANNED_OUTAGES_ENDPOINT = (
 SCHEDULE_FILE = os.getenv("SCHEDULE_FILE", "schedule.json")
 
 # Файл зі станом сповіщень (що вже надіслано), щоб не дублювати повідомлення.
-# Його треба зберігати між запусками (див. коментар у кінці відповіді).
+# Його треба зберігати між запусками.
 STATE_FILE = os.getenv("STATE_FILE", "notify_state.json")
 
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
-# Якщо відомі — постав сюди готові id, і скрипт більше не буде
-# щоразу ходити за списком регіонів/провайдерів (швидше і надійніше).
-# Дізнатись їх можна з першого запуску скрипта — він виведе їх у консоль.
-REGION_ID = os.getenv("YASNO_REGION_ID")
-PROVIDER_ID = os.getenv("YASNO_PROVIDER_ID")
-
-# Підрядок для пошуку потрібного регіону/міста, якщо ID не задані напряму
-REGION_QUERY = os.getenv("YASNO_REGION_QUERY", "дніпро")
+# Дніпро, оператор ДнЕМ
+REGION_ID = 3
+PROVIDER_ID = 301
 
 # Групи, які нас цікавлять
 YASNO_GROUPS = [
@@ -443,64 +433,12 @@ def process_notifications(now, days):
 
 
 # ============================================================
-# RESOLVE REGION / PROVIDER
+# REGION / PROVIDER
 # ============================================================
 
 def resolve_region_and_provider():
-
-    if REGION_ID and PROVIDER_ID:
-        return int(REGION_ID), int(PROVIDER_ID)
-
-    print("🔎 Шукаємо регіон/провайдера за запитом:", REGION_QUERY)
-
-    response = requests.get(REGIONS_ENDPOINT, timeout=30)
-    response.raise_for_status()
-
-    regions = response.json()
-
-    matches = [
-        r for r in regions
-        if REGION_QUERY.lower() in str(r.get("value", "")).lower()
-    ]
-
-    if not matches:
-        raise RuntimeError(
-            f"Регіон за запитом '{REGION_QUERY}' не знайдено. "
-            f"Доступні регіони: "
-            f"{[r.get('value') for r in regions]}"
-        )
-
-    if len(matches) > 1:
-        print("⚠️ Знайдено декілька регіонів, беремо перший:")
-        for r in matches:
-            print(f"   - {r.get('value')} (id={r.get('id')})")
-
-    region = matches[0]
-    dsos = region.get("dsos", [])
-
-    if not dsos:
-        raise RuntimeError(
-            f"У регіону '{region.get('value')}' немає провайдерів (dsos)"
-        )
-
-    if len(dsos) > 1:
-        print("⚠️ Знайдено декілька провайдерів, беремо перший:")
-        for d in dsos:
-            print(f"   - {d.get('name')} (id={d.get('id')})")
-
-    provider = dsos[0]
-
-    print(
-        f"✅ Регіон: {region.get('value')} (id={region.get('id')}) | "
-        f"Провайдер: {provider.get('name')} (id={provider.get('id')})"
-    )
-    print(
-        "💡 Щоб не робити цей пошук щоразу, задай змінні оточення:\n"
-        f"   YASNO_REGION_ID={region.get('id')}\n"
-        f"   YASNO_PROVIDER_ID={provider.get('id')}"
-    )
-
-    return region.get("id"), provider.get("id")
+    print(f"📍 Дніпро (ДнЕМ): region={REGION_ID}, dso={PROVIDER_ID}")
+    return REGION_ID, PROVIDER_ID
 
 
 # ============================================================
@@ -625,7 +563,7 @@ def fetch_yasno_schedule():
 def main():
 
     print("=" * 60)
-    print("🚀 YASNO PARSER (new API)")
+    print("🚀 YASNO PARSER (Дніпро, ДнЕМ)")
     print("=" * 60)
 
     # завжди київський час, незалежно від часового поясу сервера
