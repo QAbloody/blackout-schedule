@@ -64,7 +64,7 @@ NOTIFY_GROUPS = [
     if g.strip()
 ] or list(YASNO_GROUPS)
 
-# За скільки хвилин попереджати про відключення
+# За скільки хвилин попереджати про відключенн
 REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "30"))
 
 
