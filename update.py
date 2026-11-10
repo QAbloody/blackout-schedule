@@ -64,7 +64,7 @@ NOTIFY_GROUPS = [
     if g.strip()
 ] or list(YASNO_GROUPS)
 
-# За скільки хвилин попереджати про відключенн
+# За скільки хвилин попереджати про відключення
 REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "30"))
 
 
@@ -470,6 +470,250 @@ def has_real_schedule(data):
     return False
 
 
+# ------------------------------------------------------------
+# Розбір таблиці "Заплановані відключення" прямо зі сторінки
+# ------------------------------------------------------------
+
+# JS виконується у браузері. Він не залежить від верстки (table/div):
+# шукає підписи рядків ("3.1"), підписи колонок ("8 - 9") та іконки
+# "світла немає", і зіставляє їх за координатами на екрані.
+TABLE_JS = r"""
+() => {
+  const visible = el => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const center = el => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2,
+             w: r.width, h: r.height };
+  };
+  const ownText = el => (el.textContent || "").replace(/\s+/g, " ").trim();
+  const leaves = [...document.querySelectorAll("body *")]
+    .filter(e => e.children.length === 0 && visible(e));
+
+  const rows = leaves
+    .filter(e => /^[1-6]\.[12]$/.test(ownText(e)))
+    .map(e => ({ group: ownText(e), ...center(e) }));
+
+  const cols = leaves
+    .filter(e => /^\d{1,2}\s*[-–]\s*\d{1,2}$/.test(ownText(e)))
+    .map(e => ({ hour: parseInt(ownText(e), 10), ...center(e) }));
+
+  // іконки: svg / img / елементи з фоновою картинкою
+  const iconEls = [];
+  for (const e of document.querySelectorAll("body *")) {
+    if (!visible(e)) continue;
+    if (e.closest("svg") && e.tagName.toLowerCase() !== "svg") continue;
+    const tag = e.tagName.toLowerCase();
+    let isIcon = tag === "svg" || tag === "img";
+    if (!isIcon) {
+      const bg = getComputedStyle(e).backgroundImage;
+      isIcon = bg && bg !== "none" && bg.includes("url");
+    }
+    if (!isIcon) continue;
+    const c = center(e);
+    if (c.w > 70 || c.h > 70) continue;   // не іконка
+    iconEls.push(c);
+  }
+
+  return { rows, cols, icons: iconEls };
+}
+"""
+
+
+def hours_to_intervals_slots(hour_states):
+    """hour_states: {година: 'full' | 'half'} для одного рядка (черги).
+    Повертає список слотів {"start","end","type"} у хвилинах.
+
+    Повна іконка = година без світла. Мала іконка = пів години;
+    яка саме половина — визначаємо за сусідами:
+      сусід ліворуч відключений  -> перша половина (h:00-h:30)
+      сусід праворуч відключений -> друга половина (h:30-h+1:00)
+    """
+
+    half_hours = [False] * 48
+
+    for h, state in hour_states.items():
+        if not 0 <= h <= 23:
+            continue
+
+        if state == "full":
+            half_hours[h * 2] = True
+            half_hours[h * 2 + 1] = True
+            continue
+
+        left = hour_states.get(h - 1)
+        right = hour_states.get(h + 1)
+
+        if left and not right:
+            half_hours[h * 2] = True            # перша половина
+        elif right and not left:
+            half_hours[h * 2 + 1] = True        # друга половина
+        elif left and right:
+            half_hours[h * 2] = True
+            half_hours[h * 2 + 1] = True
+        else:
+            half_hours[h * 2 + 1] = True        # ізольована — друга половина
+
+    slots = []
+    i = 0
+    while i < 48:
+        if half_hours[i]:
+            j = i
+            while j < 48 and half_hours[j]:
+                j += 1
+            slots.append({"start": i * 30, "end": j * 30, "type": "Definite"})
+            i = j
+        else:
+            i += 1
+
+    return slots
+
+
+def parse_table_snapshot(snapshot):
+    """snapshot з TABLE_JS -> {група: [слоти]} або None, якщо таблицю
+    не знайдено."""
+
+    rows = snapshot.get("rows") or []
+    cols = snapshot.get("cols") or []
+    icons = snapshot.get("icons") or []
+
+    if len(rows) < 6 or len(cols) < 12:
+        return None
+
+    # унікальні колонки за годиною
+    col_by_hour = {}
+    for c in cols:
+        col_by_hour.setdefault(c["hour"], c)
+
+    col_list = sorted(col_by_hour.values(), key=lambda c: c["x"])
+    col_w = (col_list[-1]["x"] - col_list[0]["x"]) / max(len(col_list) - 1, 1)
+
+    row_by_group = {}
+    for r in rows:
+        row_by_group.setdefault(r["group"], r)
+
+    row_list = sorted(row_by_group.values(), key=lambda r: r["y"])
+    row_h = (row_list[-1]["y"] - row_list[0]["y"]) / max(len(row_list) - 1, 1)
+
+    # іконки з легенди лежать нижче останнього рядка / вище першого — відсікаємо
+    cells = {}
+    widths = []
+
+    for ic in icons:
+        row = min(row_list, key=lambda r: abs(r["y"] - ic["y"]))
+        col = min(col_list, key=lambda c: abs(c["x"] - ic["x"]))
+
+        if abs(row["y"] - ic["y"]) > row_h * 0.6:
+            continue
+        if abs(col["x"] - ic["x"]) > col_w * 0.6:
+            continue
+
+        key = (row["group"], col["hour"])
+        cells[key] = max(cells.get(key, 0), ic["w"])
+        widths.append(ic["w"])
+
+    if not widths:
+        return {r["group"]: [] for r in row_list}
+
+    max_w = max(widths)
+
+    result = {}
+
+    for r in row_list:
+        states = {}
+        for (group, hour), w in cells.items():
+            if group != r["group"]:
+                continue
+            states[hour] = "full" if w >= max_w * 0.75 else "half"
+        result[r["group"]] = hours_to_intervals_slots(states)
+
+    return result
+
+
+def fetch_via_table(timeout_ms=30000):
+    """Читає таблицю "Заплановані відключення" зі сторінки Yasno.
+    Повертає дані у тому ж форматі, що й API (today/tomorrow зі слотами)."""
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("⚠️ playwright не встановлено — таблицю не прочитати")
+        return None
+
+    snapshots = {}
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1400, "height": 1000})
+            page.goto(PAGE_URL, wait_until="networkidle", timeout=timeout_ms)
+
+            try:
+                page.wait_for_selector("text=Черга", timeout=15000)
+            except Exception:
+                pass
+
+            page.wait_for_timeout(1500)
+            snapshots["today"] = page.evaluate(TABLE_JS)
+
+            try:
+                page.get_by_text("Завтра").first.click(timeout=5000)
+                page.wait_for_timeout(1500)
+                snapshots["tomorrow"] = page.evaluate(TABLE_JS)
+            except Exception as e:
+                print(f"⚠️ Не вдалося відкрити вкладку 'Завтра': {e}")
+
+            if os.getenv("YASNO_DEBUG") or not snapshots.get("today", {}).get("rows"):
+                with open("debug_page.html", "w", encoding="utf-8") as f:
+                    f.write(page.content())
+                page.screenshot(path="debug_page.png", full_page=True)
+                print("🐛 Збережено debug_page.html / debug_page.png")
+
+            browser.close()
+    except Exception as e:
+        print(f"⚠️ Помилка при читанні сторінки: {e}")
+        return None
+
+    today_tbl = parse_table_snapshot(snapshots.get("today", {}))
+
+    if not today_tbl:
+        print("⚠️ Таблицю з графіком на сторінці не знайдено")
+        return None
+
+    tomorrow_tbl = (
+        parse_table_snapshot(snapshots["tomorrow"])
+        if "tomorrow" in snapshots else None
+    ) or {}
+
+    now = datetime.now(KYIV_TZ)
+    today_iso = now.strftime("%Y-%m-%dT00:00:00")
+    tomorrow_iso = (now + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
+
+    def block(tbl, group, date_iso):
+        slots = tbl.get(group)
+        # порожня таблиця на день = графік ще не опубліковано
+        # (так само, як статус WaitingForSchedule в API)
+        published = any(tbl.values()) if tbl else False
+        return {
+            "slots": slots or [],
+            "date": date_iso,
+            "status": "ScheduleApplies" if published else "WaitingForSchedule",
+        }
+
+    data = {}
+
+    for group in YASNO_GROUPS:
+        data[group] = {
+            "today": block(today_tbl, group, today_iso),
+            "tomorrow": block(tomorrow_tbl, group, tomorrow_iso),
+        }
+
+    print(f"📋 Таблицю зі сторінки прочитано: {len(today_tbl)} груп")
+    return data
+
+
 def fetch_via_browser(timeout_ms=30000):
     """Відкриває сторінку Yasno і перехоплює JSON, який вона сама завантажує."""
 
@@ -539,8 +783,9 @@ def get_schedule_data():
 
     candidates = []
 
-    for name, fetcher in (("браузер", fetch_via_browser),
-                          ("API", fetch_via_api)):
+    for name, fetcher in (("таблиця на сторінці", fetch_via_table),
+                          ("перехоплення API", fetch_via_browser),
+                          ("прямий API", fetch_via_api)):
         print(f"🔎 Джерело: {name}")
         data = fetcher()
         if data is None:
