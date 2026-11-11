@@ -25,7 +25,7 @@ except ImportError:
 SCHEDULE_SOURCES = os.getenv("SCHEDULE_SOURCES", "telegram,table,browser,api")
 
 # Яке джерело дало дані в останньому запуску (пишеться в schedule.json)
-LAST_SOURCE = "app.yasno.ua"
+LAST_SOURCE = "telegram"
 
 PLANNED_OUTAGES_ENDPOINT = (
     "https://app.yasno.ua/api/blackout-service/public/shutdowns/"
@@ -45,7 +45,7 @@ REGION_ID = 3
 PROVIDER_ID = 301
 
 # Групи, які нас цікавлять
-YASNO_GROUPS = [
+DTEK_GROUPS = [
     "1.1", "1.2",
     "2.1", "2.2",
     "3.1", "3.2",
@@ -54,7 +54,7 @@ YASNO_GROUPS = [
     "6.1", "6.2",
 ]
 
-ALL_GROUPS = YASNO_GROUPS
+ALL_GROUPS = DTEK_GROUPS
 
 
 # ============================================================
@@ -75,7 +75,7 @@ NOTIFY_GROUPS = [
     g.strip()
     for g in os.getenv("NOTIFY_GROUPS", "").split(",")
     if g.strip()
-] or list(YASNO_GROUPS)
+] or list(DTEK_GROUPS)
 
 # За скільки хвилин попереджати про відключення
 REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "30"))
@@ -288,12 +288,18 @@ def notify_schedules(days, state):
             if previous == digest:
                 continue
 
-            line = f"🔹 Група {group}: {format_intervals(intervals)}"
-
             if previous is None:
-                new_lines.append(line)
+                new_lines.append(
+                    f"🔹 Група {group}: {format_intervals(intervals)}"
+                )
             else:
-                changed_lines.append(line)
+                # у стані зберігається попередній графік — показуємо "було → стало"
+                old_intervals = [] if previous == "none" else previous.split("|")
+                changed_lines.append(
+                    f"🔹 Група {group}:\n"
+                    f"   було: {format_intervals(old_intervals)}\n"
+                    f"   стало: {format_intervals(intervals)}"
+                )
 
             pending[group] = digest
 
@@ -646,7 +652,7 @@ def parse_table_snapshot(snapshot):
 
 
 def fetch_via_table(timeout_ms=30000):
-    """Читає таблицю "Заплановані відключення" зі сторінки Yasno.
+    """Читає таблицю "Заплановані відключення" зі сторінки резервного джерела.
     Повертає дані у тому ж форматі, що й API (today/tomorrow зі слотами)."""
 
     try:
@@ -717,7 +723,7 @@ def fetch_via_table(timeout_ms=30000):
 
     data = {}
 
-    for group in YASNO_GROUPS:
+    for group in DTEK_GROUPS:
         data[group] = {
             "today": block(today_tbl, group, today_iso),
             "tomorrow": block(tomorrow_tbl, group, tomorrow_iso),
@@ -728,7 +734,7 @@ def fetch_via_table(timeout_ms=30000):
 
 
 def fetch_via_browser(timeout_ms=30000):
-    """Відкриває сторінку Yasno і перехоплює JSON, який вона сама завантажує."""
+    """Відкриває сторінку резервного джерела і перехоплює JSON, який вона сама завантажує."""
 
     try:
         from playwright.sync_api import sync_playwright
@@ -765,7 +771,7 @@ def fetch_via_browser(timeout_ms=30000):
         return None
 
     url, data = found[-1]
-    print(f"🌐 Перехоплено API зі сторінки: {url}")
+    print("🌐 Перехоплено дані зі сторінки резервного джерела")
     return data
 
 
@@ -781,7 +787,7 @@ def fetch_via_api():
 
     try:
         response = requests.get(url, timeout=30)
-        print(f"HTTP: {response.status_code} ({url})")
+        print(f"HTTP: {response.status_code}")
         response.raise_for_status()
         data = response.json()
     except Exception as e:
@@ -797,10 +803,10 @@ def get_schedule_data():
     global LAST_SOURCE
 
     available = {
-        "telegram": ("Telegram-канали ДТЕК", "t.me/dp_dtek_*", fetch_via_telegram),
-        "table": ("таблиця на сторінці", "app.yasno.ua", fetch_via_table),
-        "browser": ("перехоплення API", "app.yasno.ua", fetch_via_browser),
-        "api": ("прямий API", "app.yasno.ua", fetch_via_api),
+        "telegram": ("Telegram-канали ДТЕК", "telegram", fetch_via_telegram),
+        "table": ("таблиця на сторінці", "reserve", fetch_via_table),
+        "browser": ("перехоплення API", "reserve", fetch_via_browser),
+        "api": ("прямий API", "reserve", fetch_via_api),
     }
 
     order = [s.strip() for s in SCHEDULE_SOURCES.split(",") if s.strip()]
@@ -840,10 +846,10 @@ def get_schedule_data():
 # FETCH SCHEDULE
 # ============================================================
 
-def fetch_yasno_schedule():
+def fetch_schedule():
     print()
     print("=" * 60)
-    print("📡 YASNO API (app.yasno.ua)")
+    print("📡 ОТРИМАННЯ ГРАФІКА")
     print("=" * 60)
 
     result = {
@@ -863,7 +869,7 @@ def fetch_yasno_schedule():
             return result
 
         if os.getenv("YASNO_DEBUG"):
-            sample_group = YASNO_GROUPS[0]
+            sample_group = DTEK_GROUPS[0]
             print(
                 f"🐛 DEBUG сирі дані для групи {sample_group}:\n"
                 + json.dumps(
@@ -873,7 +879,7 @@ def fetch_yasno_schedule():
                 )
             )
 
-        for group in YASNO_GROUPS:
+        for group in DTEK_GROUPS:
 
             group_data = data.get(group)
 
@@ -927,11 +933,11 @@ def fetch_yasno_schedule():
                 f"{tomorrow_minutes % 60:02d}хв"
             )
 
-        print(f"✅ YASNO оброблено: {len(result['today'])} груп")
+        print(f"✅ Графік оброблено: {len(result['today'])} груп")
 
     except Exception as e:
 
-        print(f"❌ Помилка YASNO: {e}")
+        print(f"❌ Помилка отримання графіка: {e}")
         traceback.print_exc()
         result["error"] = str(e)
 
@@ -945,20 +951,20 @@ def fetch_yasno_schedule():
 def main():
 
     print("=" * 60)
-    print("🚀 YASNO PARSER (Дніпро, ДнЕМ)")
+    print("🚀 ПАРСЕР ГРАФІКІВ (Дніпро, ДнЕМ)")
     print("=" * 60)
 
     # завжди київський час, незалежно від часового поясу сервера
     now = datetime.now(KYIV_TZ).replace(tzinfo=None)
 
-    yasno_data = fetch_yasno_schedule()
+    schedule_data = fetch_schedule()
 
     # дата береться з відповіді API, якщо вона там є;
     # інакше рахуємо локально (сьогодні / сьогодні+1)
-    today = yasno_data.get("dates", {}).get("today") or now.strftime(
+    today = schedule_data.get("dates", {}).get("today") or now.strftime(
         "%d.%m.%Y"
     )
-    tomorrow = yasno_data.get("dates", {}).get("tomorrow") or (
+    tomorrow = schedule_data.get("dates", {}).get("tomorrow") or (
         now + timedelta(days=1)
     ).strftime("%d.%m.%Y")
 
@@ -966,12 +972,12 @@ def main():
     print(f"📅 Сьогодні: {today}")
     print(f"📅 Завтра: {tomorrow}")
 
-    today_groups = dict(yasno_data.get("today", {}))
-    tomorrow_groups = dict(yasno_data.get("tomorrow", {}))
+    today_groups = dict(schedule_data.get("today", {}))
+    tomorrow_groups = dict(schedule_data.get("tomorrow", {}))
 
-    today_statuses = dict(yasno_data.get("statuses", {}).get("today", {}))
+    today_statuses = dict(schedule_data.get("statuses", {}).get("today", {}))
     tomorrow_statuses = dict(
-        yasno_data.get("statuses", {}).get("tomorrow", {})
+        schedule_data.get("statuses", {}).get("tomorrow", {})
     )
 
     # якщо групи взагалі немає в даних API (запит не вдався,
@@ -997,15 +1003,15 @@ def main():
         v is None for v in tomorrow_statuses.values()
     )
 
-    if yasno_data.get("error") or all_missing:
+    if schedule_data.get("error") or all_missing:
 
-        reason = yasno_data.get("error") or (
+        reason = schedule_data.get("error") or (
             "Дані по жодній групі не отримано "
             "(порожня/неочікувана відповідь API)"
         )
 
         alert_text = (
-            "🚨 YASNO PARSER: збій оновлення графіка\n\n"
+            "🚨 Парсер графіків: збій оновлення графіка\n\n"
             f"Час: {now.strftime('%Y-%m-%d %H:%M:%S')} (Київ)\n"
             f"Причина: {reason}\n\n"
             "schedule.json НЕ перезаписано — залишено попередню версію."
