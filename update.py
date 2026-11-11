@@ -9,10 +9,23 @@ import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+# Telegram-канали ДТЕК (tg_source.py лежить поруч з цим файлом)
+try:
+    from tg_source import fetch_via_telegram
+except ImportError:
+    fetch_via_telegram = None
+
 
 # ============================================================
 # НАСТРОЙКИ
 # ============================================================
+
+# Порядок джерел через кому: telegram, table, browser, api.
+# Перше джерело, де вже є графік, перемагає; решта — запасні.
+SCHEDULE_SOURCES = os.getenv("SCHEDULE_SOURCES", "telegram,table,browser,api")
+
+# Яке джерело дало дані в останньому запуску (пишеться в schedule.json)
+LAST_SOURCE = "app.yasno.ua"
 
 PLANNED_OUTAGES_ENDPOINT = (
     "https://app.yasno.ua/api/blackout-service/public/shutdowns/"
@@ -781,23 +794,44 @@ def fetch_via_api():
 def get_schedule_data():
     """Повертає найкращі доступні дані: перевага — тим, де вже є графік."""
 
+    global LAST_SOURCE
+
+    available = {
+        "telegram": ("Telegram-канали ДТЕК", "t.me/dp_dtek_*", fetch_via_telegram),
+        "table": ("таблиця на сторінці", "app.yasno.ua", fetch_via_table),
+        "browser": ("перехоплення API", "app.yasno.ua", fetch_via_browser),
+        "api": ("прямий API", "app.yasno.ua", fetch_via_api),
+    }
+
+    order = [s.strip() for s in SCHEDULE_SOURCES.split(",") if s.strip()]
+
     candidates = []
 
-    for name, fetcher in (("таблиця на сторінці", fetch_via_table),
-                          ("перехоплення API", fetch_via_browser),
-                          ("прямий API", fetch_via_api)):
+    for key in order:
+        if key not in available:
+            print(f"⚠️ Невідоме джерело '{key}' у SCHEDULE_SOURCES — пропущено")
+            continue
+
+        name, source_label, fetcher = available[key]
+
+        if fetcher is None:
+            print(f"⚠️ Джерело '{name}' недоступне (немає tg_source.py?) — пропущено")
+            continue
+
         print(f"🔎 Джерело: {name}")
         data = fetcher()
         if data is None:
             continue
         if has_real_schedule(data):
             print(f"✅ Графік знайдено ({name})")
+            LAST_SOURCE = source_label
             return data
         print(f"ℹ️ ({name}) відповідь є, але графік ще не опубліковано")
-        candidates.append(data)
+        candidates.append((source_label, data))
 
     if candidates:
-        return candidates[0]
+        LAST_SOURCE, data = candidates[0]
+        return data
 
     raise RuntimeError("Жодне джерело не повернуло дані з графіком")
 
@@ -994,7 +1028,7 @@ def main():
 
         "updated": now.strftime("%Y-%m-%d %H:%M:%S"),
 
-        "source": "app.yasno.ua",
+        "source": LAST_SOURCE,
 
         "today": {
             "date": today,
