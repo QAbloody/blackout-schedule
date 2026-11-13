@@ -80,6 +80,14 @@ NOTIFY_GROUPS = [
 # За скільки хвилин попереджати про відключення
 REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "30"))
 
+# Ранкова добірка графіків на день: DIGEST_ENABLED=0 вимикає її.
+# Надсилається один раз на добу, коли настає DIGEST_HOUR (за Києвом).
+# Якщо запуск у цей час пропущено, бот надішле її при найближчому запуску,
+# але не пізніше ніж через DIGEST_WINDOW_HOURS годин.
+DIGEST_ENABLED = os.getenv("DIGEST_ENABLED", "1") != "0"
+DIGEST_HOUR = int(os.getenv("DIGEST_HOUR", "5"))
+DIGEST_WINDOW_HOURS = int(os.getenv("DIGEST_WINDOW_HOURS", "5"))
+
 
 # ============================================================
 # HELPERS
@@ -240,6 +248,7 @@ def load_state():
 
     state.setdefault("schedules", {})   # {дата: {група: хеш графіка}}
     state.setdefault("reminders", [])   # ключі вже надісланих нагадувань
+    state.setdefault("digests", [])     # дати (YYYY-MM-DD), за які ранкову добірку надіслано
 
     return state
 
@@ -411,8 +420,73 @@ def notify_upcoming_outages(now, days, state):
         state["reminders"].extend(new_keys)
 
 
+def format_duration(minutes):
+    h, m = divmod(int(minutes), 60)
+
+    if h and m:
+        return f"{h} год {m:02d} хв"
+    if h:
+        return f"{h} год"
+    return f"{m} хв"
+
+
+def notify_morning_digest(now, days, state):
+    """Раз на добу, починаючи з DIGEST_HOUR, надсилає графіки на сьогодні.
+
+    Надсилається лише коли графік на сьогодні вже опубліковано хоча б для
+    однієї групи; якщо ні — наступний запуск спробує ще раз (у межах вікна).
+    """
+
+    if not DIGEST_ENABLED:
+        return
+
+    today_key = now.strftime("%Y-%m-%d")
+
+    if today_key in state["digests"]:
+        return
+
+    start = now.replace(hour=DIGEST_HOUR, minute=0, second=0, microsecond=0)
+
+    if not (start <= now < start + timedelta(hours=DIGEST_WINDOW_HOURS)):
+        return
+
+    # days[0] — це "сьогодні"
+    _label, date_str, groups, statuses = days[0]
+
+    lines = []
+
+    for group in NOTIFY_GROUPS:
+
+        if not schedule_ready(statuses.get(group)):
+            continue
+
+        intervals = groups.get(group, [])
+        off_text = ""
+
+        if intervals:
+            off_text = f" (без світла {format_duration(sum_intervals(intervals))})"
+
+        lines.append(
+            f"🔹 Група {group}: {format_intervals(intervals)}{off_text}"
+        )
+
+    if not lines:
+        print("ℹ️ Ранкова добірка: графік на сьогодні ще не опубліковано")
+        return
+
+    text = (
+        f"☀️ Доброго ранку! Графіки на сьогодні ({date_str})\n\n"
+        + "\n".join(lines)
+    )
+
+    if send_notification(text):
+        state["digests"].append(today_key)
+
+
 def prune_state(state, now):
     """Видаляє застарілі записи зі стану."""
+
+    state["digests"] = state["digests"][-7:]
 
     cutoff = (now - timedelta(days=2)).date()
 
@@ -442,6 +516,7 @@ def process_notifications(now, days):
 
     try:
         notify_schedules(days, state)
+        notify_morning_digest(now, days, state)
         notify_upcoming_outages(now, days, state)
     except Exception as e:
         print(f"❌ Помилка сповіщень: {e}")
